@@ -1,6 +1,8 @@
 extern crate time;
 extern crate byteorder;
 
+mod constants;
+
 use std::option::Option;
 use std::cmp::Ordering;
 use std::io::Write;
@@ -32,6 +34,28 @@ fn change_state() {
 
     c.change_state(ConnectionState::INIT);
     assert!(c.state == ConnectionState::INIT);
+}
+
+#[test]
+fn packet_constructor() {
+    let data = [0x00u8];
+    let p = Packet::new(0x00000000, 0x00000000, &data);
+    assert!(p.code == 0x00000000);
+    assert!(p.ptype == 0x00000000);
+    assert!(p.data.len() == 1);
+    match p.conn {
+        None => {},
+        Some(_) => panic!("Should not have a connection assigned.")
+    }
+}
+
+#[test]
+#[should_panic]
+fn send_packet() {
+    let mut conn = Connection::new("localost", 4730);
+    let data = [0x00u8];
+    let p = Packet::new(0x00000000, 0x00000000, &data);
+    conn.sendPacket(&p)
 }
 
 #[derive(PartialEq)]
