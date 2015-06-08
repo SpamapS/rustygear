@@ -6,9 +6,11 @@ mod constants;
 use std::option::Option;
 use std::cmp::Ordering;
 use std::io::Write;
+use std::io::Read;
 use std::net::TcpStream;
 
 use byteorder::{BigEndian, WriteBytesExt};
+use byteorder::ReadBytesExt;
 
 #[test]
 fn constructor() {
@@ -38,23 +40,19 @@ fn change_state() {
 
 #[test]
 fn packet_constructor() {
-    let data = [0x00u8];
-    let p = Packet::new(0x00000000, 0x00000000, &data);
+    let data: Box<[u8]> = Box::new([0x00u8]);
+    let p = Packet::new(0x00000000, 0x00000000, data);
     assert!(p.code == 0x00000000);
     assert!(p.ptype == 0x00000000);
     assert!(p.data.len() == 1);
-    match p.conn {
-        None => {},
-        Some(_) => panic!("Should not have a connection assigned.")
-    }
 }
 
 #[test]
 #[should_panic]
 fn send_packet() {
     let mut conn = Connection::new("localost", 4730);
-    let data = [0x00u8];
-    let p = Packet::new(0x00000000, 0x00000000, &data);
+    let data: Box<[u8]> = Box::new([0x00u8]);
+    let p = Packet::new(0x00000000, 0x00000000, data);
     conn.sendPacket(&p)
 }
 
@@ -73,11 +71,10 @@ struct Connection {
     state_time: Option<time::Tm>,
 }
 
-struct Packet<'a> {
+struct Packet {
     code: u32,
     ptype: u32,
-    data: &'a [u8],
-    conn: Option<&'a Connection>,
+    data: Box<[u8]>,
 }
 
 impl Connection {
@@ -104,7 +101,7 @@ impl Connection {
         match self.conn {
             None => {
                 self.conn = Some(TcpStream::connect((&*self.host, self.port)).unwrap());
-                self.connected = true;
+self.connected = true;
                 self.connect_time = Some(time::now_utc());
             },
             Some(_) => { /* log debug "already connected" */ },
@@ -129,14 +126,33 @@ impl Connection {
                 c.write_u32::<BigEndian>(packet.code).unwrap();
                 c.write_u32::<BigEndian>(packet.ptype);
                 c.write_u32::<BigEndian>(packet.data.len() as u32).unwrap();
-                c.write_all(packet.data).unwrap()
+                c.write_all(&packet.data).unwrap()
             },
             None => panic!("Attempted to send packet on disconnected socket")
         }
     }
+
+    fn readPacket(&mut self) -> Packet {
+        match self.conn {
+            Some(ref mut c) => {
+                let code    = c.read_u32::<BigEndian>().unwrap();
+                let ptype   = c.read_u32::<BigEndian>().unwrap();
+                let datalen = c.read_u32::<BigEndian>().unwrap();
+                let mut datastream = c.take(datalen as u64);
+                let mut buf: Vec<u8> = Vec::new();
+                datastream.read_to_end(&mut buf).unwrap();
+                return Packet {
+                    code: code,
+                    ptype: ptype,
+                    data: buf.into_boxed_slice(),
+                }
+            },
+            None => panic!("Attempted to read packet on disconnected socket")
+        }
+    }
 }
 
-impl<'a> PartialEq for Packet<'a> {
+impl PartialEq for Packet {
     fn eq(&self, other: &Packet) -> bool {
         self.code == other.code &&
         self.ptype == other.ptype &&
@@ -145,13 +161,12 @@ impl<'a> PartialEq for Packet<'a> {
 }
 
 
-impl<'a> Packet<'a> {
-    fn new(code: u32, ptype: u32, data: &'a [u8]) -> Packet {
+impl Packet {
+    fn new(code: u32, ptype: u32, data: Box<[u8]>) -> Packet {
         Packet {
             code: code,
             ptype: ptype,
             data: data,
-            conn: None,
         }
     }
 }
