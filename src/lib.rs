@@ -1,5 +1,6 @@
 extern crate time;
 extern crate byteorder;
+extern crate uuid;
 
 mod constants;
 
@@ -11,6 +12,8 @@ use std::net::TcpStream;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
+
+use uuid::Uuid;
 
 #[test]
 fn constructor() {
@@ -55,6 +58,19 @@ fn send_packet() {
     let p = Packet::new(0x00000000, 0x00000000, data);
     conn.sendPacket(&p)
 }
+
+#[test]
+fn echo() {
+    let mut test: Vec<u8> = Vec::new();
+    test.extend("abc123".to_string().bytes());
+    let mut conn = Connection::new("localhost", 4730);
+    let result = String::from_utf8(conn.echo(test, 0)).unwrap();
+    assert_eq!("abc123", result);
+    let mut test2: Vec<u8> = Vec::new();
+    let mut output = String::from_utf8(conn.echo(test2, 0)).unwrap();
+    println!("UUID = {}", output);
+}
+
 
 #[derive(PartialEq)]
 enum ConnectionState {
@@ -149,6 +165,14 @@ self.connected = true;
             },
             None => panic!("Attempted to read packet on disconnected socket")
         }
+    }
+
+    fn echo(&mut self, mut data: Vec<u8>, timeout: u32) -> Vec<u8> {
+        if data.len() == 0 {
+            data.extend(Uuid::new_v4().to_simple_string().bytes());
+        }
+
+        data
     }
 }
 
