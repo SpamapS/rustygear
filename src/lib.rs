@@ -2,8 +2,6 @@ extern crate time;
 extern crate byteorder;
 extern crate uuid;
 
-mod constants;
-
 use std::option::Option;
 use std::cmp::Ordering;
 use std::io::Write;
@@ -12,8 +10,10 @@ use std::net::TcpStream;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
-
 use uuid::Uuid;
+
+pub mod constants;
+use constants::*;
 
 #[test]
 fn constructor() {
@@ -44,9 +44,9 @@ fn change_state() {
 #[test]
 fn packet_constructor() {
     let data: Box<[u8]> = Box::new([0x00u8]);
-    let p = Packet::new(0x00000000, 0x00000000, data);
-    assert!(p.code == 0x00000000);
-    assert!(p.ptype == 0x00000000);
+    let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
+    assert!(p.code == PacketCode::REQ);
+    assert!(p.ptype == ECHO_REQ);
     assert!(p.data.len() == 1);
 }
 
@@ -55,8 +55,8 @@ fn packet_constructor() {
 fn send_packet() {
     let mut conn = Connection::new("localost", 4730);
     let data: Box<[u8]> = Box::new([0x00u8]);
-    let p = Packet::new(0x00000000, 0x00000000, data);
-    conn.sendPacket(&p)
+    let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
+    conn.sendPacket(p)
 }
 
 #[test]
@@ -88,7 +88,7 @@ struct Connection {
 }
 
 struct Packet {
-    code: u32,
+    code: PacketCode,
     ptype: u32,
     data: Box<[u8]>,
 }
@@ -136,10 +136,13 @@ self.connected = true;
         self.connect()
     }
 
-    fn sendPacket(&mut self, packet: &Packet) {
+    fn sendPacket(&mut self, packet: Packet) {
         match self.conn {
             Some(ref mut c) => {
-                c.write_u32::<BigEndian>(packet.code).unwrap();
+                match packet.code {
+                    PacketCode::REQ => { c.write(&REQ).unwrap(); }
+                    PacketCode::RES => { c.write(&RES).unwrap(); }
+                }
                 c.write_u32::<BigEndian>(packet.ptype);
                 c.write_u32::<BigEndian>(packet.data.len() as u32).unwrap();
                 c.write_all(&packet.data).unwrap()
@@ -148,10 +151,26 @@ self.connected = true;
         }
     }
 
+    fn _code_from_vec(code: Vec<u8>) -> Result<PacketCode, &'static str> {
+        if code[..] == REQ {
+            return Ok(PacketCode::REQ);
+        } else if code[..] == RES {
+            return Ok(PacketCode::RES);
+        }
+        return Err("Invalid packet code");
+    }
+
+
+
     fn readPacket(&mut self) -> Packet {
         match self.conn {
             Some(ref mut c) => {
-                let code    = c.read_u32::<BigEndian>().unwrap();
+                let mut code: Vec<u8> = Vec::new();
+                {
+                    let mut codestream = c.take(4);
+                    codestream.read_to_end(&mut code).unwrap();
+                }
+                let code: PacketCode = Connection::_code_from_vec(code).unwrap();
                 let ptype   = c.read_u32::<BigEndian>().unwrap();
                 let datalen = c.read_u32::<BigEndian>().unwrap();
                 let mut datastream = c.take(datalen as u64);
@@ -174,6 +193,11 @@ self.connected = true;
 
         data
     }
+
+    fn sendEchoReq(&mut self, mut data: Vec<u8>) {
+        let p = Packet::new(PacketCode::REQ, ECHO_REQ, data.into_boxed_slice());
+        self.sendPacket(p);
+    }
 }
 
 impl PartialEq for Packet {
@@ -186,7 +210,7 @@ impl PartialEq for Packet {
 
 
 impl Packet {
-    fn new(code: u32, ptype: u32, data: Box<[u8]>) -> Packet {
+    fn new(code: PacketCode, ptype: u32, data: Box<[u8]>) -> Packet {
         Packet {
             code: code,
             ptype: ptype,

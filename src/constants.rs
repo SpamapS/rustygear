@@ -1,39 +1,45 @@
-const CAN_DO:             u32 = 1;
-const CANT_DO:            u32 = 2;
-const RESET_ABILITIES:    u32 = 3;
-const PRE_SLEEP:          u32 = 4;
+pub const CAN_DO:             u32 = 1;
+pub const CANT_DO:            u32 = 2;
+pub const RESET_ABILITIES:    u32 = 3;
+pub const PRE_SLEEP:          u32 = 4;
 // 5 is unused
-const NOOP:               u32 = 6;
-const SUBMIT_JOB:         u32 = 7;
-const JOB_CREATED:        u32 = 8;
-const GRAB_JOB:           u32 = 9;
-const NO_JOB:             u32 = 10;
-const JOB_ASSIGN:         u32 = 11;
-const WORK_STATUS:        u32 = 12;
-const WORK_COMPLETE:      u32 = 13;
-const WORK_FAIL:          u32 = 14;
-const GET_STATUS:         u32 = 15;
-const ECHO_REQ:           u32 = 16;
-const ECHO_RES:           u32 = 17;
-const SUBMIT_JOB_BG:      u32 = 18;
-const ERROR:              u32 = 19;
-const STATUS_RES:         u32 = 20;
-const SUBMIT_JOB_HIGH:    u32 = 21;
-const SET_CLIENT_ID:      u32 = 22;
-const CAN_DO_TIMEOUT:     u32 = 23;
-const ALL_YOURS:          u32 = 24;
-const WORK_EXCEPTION:     u32 = 25;
-const OPTION_REQ:         u32 = 26;
-const OPTION_RES:         u32 = 27;
-const WORK_DATA:          u32 = 28;
-const WORK_WARNING:       u32 = 29;
-const GRAB_JOB_UNIQ:      u32 = 30;
-const JOB_ASSIGN_UNIQ:    u32 = 31;
-const SUBMIT_JOB_HIGH_BG: u32 = 32;
-const SUBMIT_JOB_LOW:     u32 = 33;
-const SUBMIT_JOB_LOW_BG:  u32 = 34;
-const SUBMIT_JOB_SCHED:   u32 = 35;
-const SUBMIT_JOB_EPOCH:   u32 = 36;
+pub const NOOP:               u32 = 6;
+pub const SUBMIT_JOB:         u32 = 7;
+pub const JOB_CREATED:        u32 = 8;
+pub const GRAB_JOB:           u32 = 9;
+pub const NO_JOB:             u32 = 10;
+pub const JOB_ASSIGN:         u32 = 11;
+pub const WORK_STATUS:        u32 = 12;
+pub const WORK_COMPLETE:      u32 = 13;
+pub const WORK_FAIL:          u32 = 14;
+pub const GET_STATUS:         u32 = 15;
+pub const ECHO_REQ:           u32 = 16;
+pub const ECHO_RES:           u32 = 17;
+pub const SUBMIT_JOB_BG:      u32 = 18;
+pub const ERROR:              u32 = 19;
+pub const STATUS_RES:         u32 = 20;
+pub const SUBMIT_JOB_HIGH:    u32 = 21;
+pub const SET_CLIENT_ID:      u32 = 22;
+pub const CAN_DO_TIMEOUT:     u32 = 23;
+pub const ALL_YOURS:          u32 = 24;
+pub const WORK_EXCEPTION:     u32 = 25;
+pub const OPTION_REQ:         u32 = 26;
+pub const OPTION_RES:         u32 = 27;
+pub const WORK_DATA:          u32 = 28;
+pub const WORK_WARNING:       u32 = 29;
+pub const GRAB_JOB_UNIQ:      u32 = 30;
+pub const JOB_ASSIGN_UNIQ:    u32 = 31;
+pub const SUBMIT_JOB_HIGH_BG: u32 = 32;
+pub const SUBMIT_JOB_LOW:     u32 = 33;
+pub const SUBMIT_JOB_LOW_BG:  u32 = 34;
+pub const SUBMIT_JOB_SCHED:   u32 = 35;
+pub const SUBMIT_JOB_EPOCH:   u32 = 36;
 
-const REQ: [u8; 5] = [0, 0, 'R' as u8, 'E' as u8, 'Q' as u8];
-const RES: [u8; 5] = [0, 0, 'R' as u8, 'E' as u8, 'S' as u8];
+pub const REQ: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
+pub const RES: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
+
+#[derive(PartialEq)]
+pub enum PacketCode {
+    REQ,
+    RES,
+}
