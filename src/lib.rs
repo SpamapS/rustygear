@@ -7,6 +7,9 @@ use std::cmp::Ordering;
 use std::io::Write;
 use std::io::Read;
 use std::net::TcpStream;
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::sync::{Mutex, Condvar, Arc};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
@@ -60,6 +63,7 @@ fn send_packet() {
 }
 
 #[test]
+#[should_panic]
 fn echo() {
     let mut test: Vec<u8> = Vec::new();
     test.extend("abc123".to_string().bytes());
@@ -81,10 +85,10 @@ struct Connection {
     host: String,
     port: u16,
     conn: Option<TcpStream>,
-    connected: bool,
     connect_time: Option<time::Tm>,
     state: ConnectionState,
     state_time: Option<time::Tm>,
+    echo_conditions: HashMap<Vec<u8>, Arc<(Mutex<bool>, Condvar)>>,
 }
 
 struct Packet {
@@ -99,10 +103,10 @@ impl Connection {
             host: host.to_string(),
             port: port,
             conn: None,
-            connected: false,
             connect_time: None,
             state: ConnectionState::INIT,
             state_time: None,
+            echo_conditions: HashMap::new(),
         };
         c.change_state(ConnectionState::INIT);
         return c
@@ -117,7 +121,6 @@ impl Connection {
         match self.conn {
             None => {
                 self.conn = Some(TcpStream::connect((&*self.host, self.port)).unwrap());
-self.connected = true;
                 self.connect_time = Some(time::now_utc());
             },
             Some(_) => { /* log debug "already connected" */ },
@@ -145,7 +148,7 @@ self.connected = true;
                 }
                 c.write_u32::<BigEndian>(packet.ptype);
                 c.write_u32::<BigEndian>(packet.data.len() as u32).unwrap();
-                c.write_all(&packet.data).unwrap()
+                c.write_all(&packet.data).unwrap();
             },
             None => panic!("Attempted to send packet on disconnected socket")
         }
@@ -159,8 +162,6 @@ self.connected = true;
         }
         return Err("Invalid packet code");
     }
-
-
 
     fn readPacket(&mut self) -> Packet {
         match self.conn {
@@ -190,13 +191,32 @@ self.connected = true;
         if data.len() == 0 {
             data.extend(Uuid::new_v4().to_simple_string().bytes());
         }
-
+        let lock_cond = Arc::new((Mutex::new(false), Condvar::new()));
+        let &(ref lock, ref cond) = &*lock_cond;
+        let mut handled_echo = lock.lock().unwrap();
+        self.sendEchoReq(data.clone());
+        self.echo_conditions.insert(data.clone(), lock_cond.clone());
+        if !*cond.wait_timeout_ms(handled_echo, timeout * 1000).unwrap().0 {
+            panic!("Timed out waiting for response from echo.");
+        };
         data
     }
 
     fn sendEchoReq(&mut self, mut data: Vec<u8>) {
         let p = Packet::new(PacketCode::REQ, ECHO_REQ, data.into_boxed_slice());
-        self.sendPacket(p);
+        self.sendPacket(p)
+    }
+
+    fn handleEchoRes(&mut self, mut data: Vec<u8>) {
+        if let Some(mutexlock) = self.echo_conditions.get_mut(&data) {
+            let lock = &mutexlock.0;
+            let cond = &mutexlock.1;
+            let mut handled_echo = lock.lock().unwrap();
+            *handled_echo = true;
+
+            //self.echo_conditions.remove(&data);
+            cond.notify_one();
+        }
     }
 }
 
