@@ -234,6 +234,7 @@ struct BaseClientServer<'a> {
     running: bool,
     active_connections: HashMap<&'a String, Arc<Mutex<Box<Connection>>>>,
     host_io: (Sender<Arc<Mutex<Box<&'a String>>>>, Receiver<Arc<Mutex<Box<&'a String>>>>),
+    conn_io: (Sender<Arc<Mutex<Box<Connection>>>>, Receiver<Arc<Mutex<Box<Connection>>>>),
 }
 
 impl <'a>BaseClientServer<'a> {
@@ -244,6 +245,7 @@ impl <'a>BaseClientServer<'a> {
             running: true,
             active_connections: HashMap::new(),
             host_io: channel(),
+            conn_io: channel(),
         }
     }
 
@@ -294,6 +296,25 @@ impl <'a>BaseClientServer<'a> {
     fn addServer(&'a self, host: &'a String) {
         let (ref tx, _) = self.host_io;
         tx.send(Arc::new(Mutex::new(Box::new(host))));
+    }
+
+    fn pollingManager(&'a self) {
+        let (_, ref rx) = self.conn_io;
+        let (ref tx, _) = self.host_io;
+        let mut threads: Vec<JoinHandle<()>> = Vec::new();
+        while self.running {
+            let conn = rx.recv().unwrap();
+            // poll this conn
+            threads.push(thread::spawn(move || {
+                let mut conn = conn.lock().unwrap();
+                let p = conn.readPacket();
+                // handle packet
+            }));
+        };
+        // scoped threads all joined here
+        for mut thread in threads {
+            thread.join();
+        }
     }
 }
 
