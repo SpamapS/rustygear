@@ -9,7 +9,11 @@ use std::io::Read;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
+use std::thread;
+use std::thread::{JoinHandle, sleep_ms, Thread};
 use std::sync::{Mutex, Condvar, Arc};
+use std::sync::mpsc::channel;
+use std::sync::mpsc::{Receiver, Sender};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
@@ -199,6 +203,7 @@ impl Connection {
         if !*cond.wait_timeout_ms(handled_echo, timeout * 1000).unwrap().0 {
             panic!("Timed out waiting for response from echo.");
         };
+        self.echo_conditions.remove(&data);
         data
     }
 
@@ -214,11 +219,89 @@ impl Connection {
             let mut handled_echo = lock.lock().unwrap();
             *handled_echo = true;
 
-            //self.echo_conditions.remove(&data);
             cond.notify_one();
         }
     }
 }
+
+struct BaseClientServer<'a> {
+    client_id: Vec<u8>,
+    running: bool,
+    active_connections: HashMap<&'a String, Arc<Mutex<Box<Connection>>>>,
+    input: Option<Sender<Arc<Mutex<Box<String>>>>>,
+}
+
+impl <'a>BaseClientServer<'a> {
+
+    fn new(client_id: Vec<u8>) -> BaseClientServer<'a> {
+        BaseClientServer {
+            client_id: client_id,
+            running: true,
+            active_connections: HashMap::new(),
+            input: None,
+        }
+    }
+
+    /*
+    fn start(mut self) {
+        let mut bcs_poll_handle = Arc::new(Mutex::new(&mut self));
+        let mut bcs_conn_handle = bcs_poll_handle.clone();
+        let poll_join_handle = Some(thread::scoped(move || BaseClientServer::_doPollLoop(bcs_poll_handle)));
+        let connect_join_handle = Some(thread::scoped(move || BaseClientServer::_doConnectLoop(bcs_conn_handle)));
+        // implicit join
+    }
+    */
+
+    fn connectionManager(&mut self, rx: Receiver<Arc<Mutex<Box<&'a String>>>>, tx: Sender<Arc<Mutex<Box<Connection>>>>) {
+        /* Run as a dedicated thread to manage the list of active/inactive connections */
+        let ac = &mut self.active_connections;
+        while self.running {
+            let container = rx.recv().unwrap();
+            let host = **container.lock().unwrap();
+            let mut insert = false;
+            let conn = match ac.get(host) {
+                Some(conn) => {
+                    let mut real_conn = conn.lock().unwrap();
+                    real_conn.reconnect();
+                    conn.clone()
+                },
+                None => {
+                    let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, 4730)))).clone();
+                    {
+                        let mut real_conn = conn.lock().unwrap();
+                        real_conn.connect();
+                    }
+                    insert = true;
+                    conn
+                }
+            };
+            if insert {
+                ac.insert(host, conn.clone());
+            }
+            tx.send(conn.clone());
+        }
+        for (_, conn) in ac.iter() {
+            let mut conn = conn.lock().unwrap();
+            conn.disconnect();
+        }
+    }
+
+    fn lostConnection(&self, conn: Arc<Mutex<Box<Connection>>>) {
+       match self.input {
+           Some(ref input) => {
+               let conn = conn.lock().unwrap();
+               input.send(Arc::new(Mutex::new(Box::new(conn.host.clone()))));
+           },
+           None => panic!("Lost connection before starting connection manager")
+       }
+    }
+
+    /*fn _doPollLoop(mut bcs: Arc<Mutex<&mut BaseClientServer>>) {
+        return
+    }*/
+
+}
+
 
 impl PartialEq for Packet {
     fn eq(&self, other: &Packet) -> bool {
