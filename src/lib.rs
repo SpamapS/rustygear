@@ -79,6 +79,11 @@ fn echo() {
     println!("UUID = {}", output);
 }
 
+#[test]
+fn bcs_constructor() {
+    let bcs = BaseClientServer::new("clientid".to_string().into_bytes());
+}
+
 
 #[derive(PartialEq)]
 enum ConnectionState {
@@ -228,7 +233,7 @@ struct BaseClientServer<'a> {
     client_id: Vec<u8>,
     running: bool,
     active_connections: HashMap<&'a String, Arc<Mutex<Box<Connection>>>>,
-    input: Option<Sender<Arc<Mutex<Box<String>>>>>,
+    host_io: (Sender<Arc<Mutex<Box<&'a String>>>>, Receiver<Arc<Mutex<Box<&'a String>>>>),
 }
 
 impl <'a>BaseClientServer<'a> {
@@ -238,7 +243,7 @@ impl <'a>BaseClientServer<'a> {
             client_id: client_id,
             running: true,
             active_connections: HashMap::new(),
-            input: None,
+            host_io: channel(),
         }
     }
 
@@ -252,8 +257,9 @@ impl <'a>BaseClientServer<'a> {
     }
     */
 
-    fn connectionManager(&mut self, rx: Receiver<Arc<Mutex<Box<&'a String>>>>, tx: Sender<Arc<Mutex<Box<Connection>>>>) {
+    fn connectionManager(&'a mut self) {
         /* Run as a dedicated thread to manage the list of active/inactive connections */
+        let (_, ref mut rx) = self.host_io;
         let ac = &mut self.active_connections;
         while self.running {
             let container = rx.recv().unwrap();
@@ -278,7 +284,6 @@ impl <'a>BaseClientServer<'a> {
             if insert {
                 ac.insert(host, conn.clone());
             }
-            tx.send(conn.clone());
         }
         for (_, conn) in ac.iter() {
             let mut conn = conn.lock().unwrap();
@@ -286,20 +291,10 @@ impl <'a>BaseClientServer<'a> {
         }
     }
 
-    fn lostConnection(&self, conn: Arc<Mutex<Box<Connection>>>) {
-       match self.input {
-           Some(ref input) => {
-               let conn = conn.lock().unwrap();
-               input.send(Arc::new(Mutex::new(Box::new(conn.host.clone()))));
-           },
-           None => panic!("Lost connection before starting connection manager")
-       }
+    fn addServer(&'a self, host: &'a String) {
+        let (ref tx, _) = self.host_io;
+        tx.send(Arc::new(Mutex::new(Box::new(host))));
     }
-
-    /*fn _doPollLoop(mut bcs: Arc<Mutex<&mut BaseClientServer>>) {
-        return
-    }*/
-
 }
 
 
