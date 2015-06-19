@@ -129,7 +129,7 @@ impl Connection {
     fn connect(&mut self) {
         match self.conn {
             None => {
-                self.conn = Some(TcpStream::connect((&*self.host, self.port)).unwrap());
+                self.conn = Some(TcpStream::connect((&self.host as &str, self.port)).unwrap());
                 self.connect_time = Some(time::now_utc());
             },
             Some(_) => { /* log debug "already connected" */ },
