@@ -232,8 +232,8 @@ impl Connection {
 struct BaseClientServer<'a> {
     client_id: Vec<u8>,
     running: bool,
-    active_connections: HashMap<&'a String, Arc<Mutex<Box<Connection>>>>,
-    host_io: (Sender<Arc<Mutex<Box<&'a String>>>>, Receiver<Arc<Mutex<Box<&'a String>>>>),
+    active_connections: HashMap<(&'a String, u16), Arc<Mutex<Box<Connection>>>>,
+    host_io: (Sender<Arc<Mutex<Box<(&'a String, u16)>>>>, Receiver<Arc<Mutex<Box<(&'a String, u16)>>>>),
     conn_io: (Sender<Arc<Mutex<Box<Connection>>>>, Receiver<Arc<Mutex<Box<Connection>>>>),
 }
 
@@ -265,16 +265,16 @@ impl <'a>BaseClientServer<'a> {
         let ac = &mut self.active_connections;
         while self.running {
             let container = rx.recv().unwrap();
-            let host = **container.lock().unwrap();
+            let (host, port) = **container.lock().unwrap();
             let mut insert = false;
-            let conn = match ac.get(host) {
+            let conn = match ac.get(&(host, port)) {
                 Some(conn) => {
                     let mut real_conn = conn.lock().unwrap();
                     real_conn.reconnect();
                     conn.clone()
                 },
                 None => {
-                    let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, 4730)))).clone();
+                    let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                     {
                         let mut real_conn = conn.lock().unwrap();
                         real_conn.connect();
@@ -284,7 +284,7 @@ impl <'a>BaseClientServer<'a> {
                 }
             };
             if insert {
-                ac.insert(host, conn.clone());
+                ac.insert((host, port), conn.clone());
             }
         }
         for (_, conn) in ac.iter() {
@@ -293,9 +293,9 @@ impl <'a>BaseClientServer<'a> {
         }
     }
 
-    fn addServer(&'a self, host: &'a String) {
+    fn addServer(&'a self, host: &'a String, port: u16) {
         let (ref tx, _) = self.host_io;
-        tx.send(Arc::new(Mutex::new(Box::new(host))));
+        tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
     }
 
     fn pollingManager(&'a self) {
