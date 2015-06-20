@@ -265,6 +265,7 @@ impl <'a>BaseClientServer<'a> {
     fn connectionManager(&'a mut self) {
         /* Run as a dedicated thread to manage the list of active/inactive connections */
         let (_, ref mut rx) = self.host_io;
+        let (ref mut tx, _) = self.conn_io;
         let ac = &mut self.active_connections;
         while self.running {
             let container = rx.recv().unwrap();
@@ -289,6 +290,7 @@ impl <'a>BaseClientServer<'a> {
             if insert {
                 ac.insert((host, port), conn.clone());
             }
+            tx.send(conn.clone());
         }
         for (_, conn) in ac.iter() {
             let mut conn = conn.lock().unwrap();
