@@ -1,3 +1,5 @@
+#![feature(mpsc_select)]
+#![feature(scoped)]
 extern crate time;
 extern crate byteorder;
 extern crate uuid;
@@ -14,7 +16,7 @@ use std::thread;
 use std::thread::{JoinHandle, sleep_ms, Thread};
 use std::sync::{Mutex, Condvar, Arc};
 use std::sync::mpsc::channel;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, RecvError};
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
@@ -232,23 +234,25 @@ impl Connection {
     }
 }
 
-struct BaseClientServer<'a> {
+struct BaseClientServer {
     client_id: Vec<u8>,
     running: bool,
-    active_connections: HashMap<(&'a String, u16), Arc<Mutex<Box<Connection>>>>,
-    host_io: (Sender<Arc<Mutex<Box<(&'a String, u16)>>>>, Receiver<Arc<Mutex<Box<(&'a String, u16)>>>>),
+    active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
+    host_io: (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>),
     conn_io: (Sender<Arc<Mutex<Box<Connection>>>>, Receiver<Arc<Mutex<Box<Connection>>>>),
+    hosts: Vec<String>,
 }
 
-impl <'a>BaseClientServer<'a> {
+impl BaseClientServer {
 
-    fn new(client_id: Vec<u8>) -> BaseClientServer<'a> {
+    fn new(client_id: Vec<u8>) -> BaseClientServer {
         BaseClientServer {
             client_id: client_id,
             running: true,
             active_connections: HashMap::new(),
             host_io: channel(),
             conn_io: channel(),
+            hosts: Vec::new(),
         }
     }
 
@@ -262,35 +266,59 @@ impl <'a>BaseClientServer<'a> {
     }
     */
 
-    fn connectionManager(&'a mut self) {
+    #[allow(unstable)]
+    fn connectionManager(&mut self) {
         /* Run as a dedicated thread to manage the list of active/inactive connections */
         let (_, ref mut rx) = self.host_io;
         let (ref mut tx, _) = self.conn_io;
+        let (new_tx, new_rx) = channel();
         let ac = &mut self.active_connections;
         while self.running {
-            let container = rx.recv().unwrap();
-            let (host, port) = **container.lock().unwrap();
-            let mut insert = false;
-            let conn = match ac.get(&(host, port)) {
-                Some(conn) => {
-                    let mut real_conn = conn.lock().unwrap();
-                    real_conn.reconnect().unwrap();
-                    conn.clone()
+            let container: Result<Arc<Mutex<Box<Connection>>>, RecvError>;
+            /* either a new conn is requested, or a new conn is connected */
+            select!(
+                container = rx.recv() => {
+                    let container = match container {
+                        Ok(container) => container,
+                        Err(_) => panic!("Could not receive in connection manager"),
+                    };
+                    let (ref host, port) = **container.lock().unwrap();
+                    let mut insert = false;
+                    let tx = tx.clone();
+                    let new_tx = new_tx.clone();
+                    match ac.get(&(host.clone(), port)) {
+                        Some(conn) => {
+                            thread::scoped(move || {
+                                let mut real_conn = conn.lock().unwrap();
+                                real_conn.reconnect().unwrap();
+                                tx.send(conn.clone());
+                            });
+                        },
+                        None => {
+                            thread::scoped(move || {
+                                let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
+                                {
+                                    let mut real_conn = conn.lock().unwrap();
+                                    real_conn.connect().unwrap();
+                                }
+                                new_tx.send(conn.clone());
+                            });
+                        }
+                    };
                 },
-                None => {
-                    let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
+                conn = new_rx.recv() => {
+                    let conn = match conn {
+                        Ok(conn) => conn,
+                        Err(_) => panic!("Could not receive in connection manager"),
+                    };
                     {
-                        let mut real_conn = conn.lock().unwrap();
-                        real_conn.connect().unwrap();
+                        let ref real_conn = **conn.lock().unwrap();
+                        let host = real_conn.host.clone();
+                        ac.insert((host, real_conn.port), conn.clone());
                     }
-                    insert = true;
-                    conn
+                    tx.send(conn.clone());
                 }
-            };
-            if insert {
-                ac.insert((host, port), conn.clone());
-            }
-            tx.send(conn.clone());
+            )
         }
         for (_, conn) in ac.iter() {
             let mut conn = conn.lock().unwrap();
@@ -298,12 +326,12 @@ impl <'a>BaseClientServer<'a> {
         }
     }
 
-    fn addServer(&'a self, host: &'a String, port: u16) {
+    fn addServer(&self, host: String, port: u16) {
         let (ref tx, _) = self.host_io;
         tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
     }
 
-    fn pollingManager(&'a self) {
+    fn pollingManager(&self) {
         let (_, ref rx) = self.conn_io;
         let (ref tx, _) = self.host_io;
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
