@@ -6,6 +6,7 @@ use std::option::Option;
 use std::cmp::Ordering;
 use std::io::Write;
 use std::io::Read;
+use std::io;
 use std::net::TcpStream;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -126,14 +127,15 @@ impl Connection {
         self.state = state;
     }
 
-    fn connect(&mut self) {
+    fn connect(&mut self) -> io::Result<()> {
         match self.conn {
             None => {
-                self.conn = Some(TcpStream::connect((&self.host as &str, self.port)).unwrap());
+                self.conn = Some(try!(TcpStream::connect((&self.host as &str, self.port))));
                 self.connect_time = Some(time::now_utc());
             },
             Some(_) => { /* log debug "already connected" */ },
         }
+        return Ok(());
     }
 
     fn disconnect(&mut self) {
@@ -143,9 +145,10 @@ impl Connection {
         }
     }
 
-    fn reconnect(&mut self) {
+    fn reconnect(&mut self) -> io::Result<()> {
         self.disconnect();
-        self.connect()
+        try!(self.connect());
+        return Ok(());
     }
 
     fn sendPacket(&mut self, packet: Packet) {
@@ -270,14 +273,14 @@ impl <'a>BaseClientServer<'a> {
             let conn = match ac.get(&(host, port)) {
                 Some(conn) => {
                     let mut real_conn = conn.lock().unwrap();
-                    real_conn.reconnect();
+                    real_conn.reconnect().unwrap();
                     conn.clone()
                 },
                 None => {
                     let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                     {
                         let mut real_conn = conn.lock().unwrap();
-                        real_conn.connect();
+                        real_conn.connect().unwrap();
                     }
                     insert = true;
                     conn
