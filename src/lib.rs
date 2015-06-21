@@ -362,12 +362,15 @@ impl BaseClientServer {
             let tx = tx.clone();
             // poll this conn
             threads.push(thread::spawn(move || {
-                let mut conn = conn.lock().unwrap();
-                match conn.readPacket() {
-                    Ok(p) => { /* handle packet */ },
-                    Err(e) => {
-                        /* Log failure */
-                        tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
+                while true {
+                    let mut conn = conn.lock().unwrap();
+                    match conn.readPacket() {
+                        Ok(p) => { /* handle packet */ },
+                        Err(e) => {
+                            /* Log failure */
+                            tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
+                            break;
+                        }
                     }
                 }
             }));
