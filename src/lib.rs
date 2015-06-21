@@ -295,7 +295,12 @@ impl BaseClientServer {
                         Some(conn) => {
                             thread::scoped(move || {
                                 let mut real_conn = conn.lock().unwrap();
-                                real_conn.reconnect().unwrap();
+                                while true {
+                                    match real_conn.reconnect() {
+                                        Ok(_) => break,
+                                        Err(_) => { /* delay retry and log warning about reconnecting */ },
+                                    }
+                                };
                                 tx.send(conn.clone());
                             });
                         },
@@ -304,7 +309,12 @@ impl BaseClientServer {
                                 let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                                 {
                                     let mut real_conn = conn.lock().unwrap();
-                                    real_conn.connect().unwrap();
+                                    while true {
+                                        match real_conn.connect() {
+                                            Ok(_) => break,
+                                            Err(_) => { /* delay retry and log warning */ }
+                                        }
+                                    };
                                 }
                                 new_tx.send(conn.clone());
                             });
