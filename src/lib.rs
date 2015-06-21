@@ -181,25 +181,26 @@ impl Connection {
         return Err("Invalid packet code");
     }
 
-    fn readPacket(&mut self) -> Packet {
+    fn readPacket(&mut self) -> io::Result<Packet> {
         match self.conn {
             Some(ref mut c) => {
                 let mut code: Vec<u8> = Vec::new();
                 {
                     let mut codestream = c.take(4);
-                    codestream.read_to_end(&mut code).unwrap();
+                    try!(codestream.read_to_end(&mut code));
                 }
                 let code: PacketCode = Connection::_code_from_vec(code).unwrap();
-                let ptype   = c.read_u32::<BigEndian>().unwrap();
-                let datalen = c.read_u32::<BigEndian>().unwrap();
+                let ptype   = try!(c.read_u32::<BigEndian>());
+                let datalen = try!(c.read_u32::<BigEndian>());
                 let mut datastream = c.take(datalen as u64);
                 let mut buf: Vec<u8> = Vec::new();
-                datastream.read_to_end(&mut buf).unwrap();
-                return Packet {
-                    code: code,
-                    ptype: ptype,
-                    data: buf.into_boxed_slice(),
-                }
+                try!(datastream.read_to_end(&mut buf));
+                Ok(
+                    Packet {
+                        code: code,
+                        ptype: ptype,
+                        data: buf.into_boxed_slice(),
+                    })
             },
             None => panic!("Attempted to read packet on disconnected socket")
         }
@@ -352,11 +353,17 @@ impl BaseClientServer {
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
         while self.running {
             let conn = rx.recv().unwrap();
+            let tx = tx.clone();
             // poll this conn
             threads.push(thread::spawn(move || {
                 let mut conn = conn.lock().unwrap();
-                let p = conn.readPacket();
-                // handle packet
+                match conn.readPacket() {
+                    Ok(p) => { /* handle packet */ },
+                    Err(e) => {
+                        /* Log failure */
+                        tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
+                    }
+                }
             }));
         };
         // scoped threads all joined here
