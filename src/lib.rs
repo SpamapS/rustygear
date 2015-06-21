@@ -299,7 +299,10 @@ impl BaseClientServer {
                                 while true {
                                     match real_conn.reconnect() {
                                         Ok(_) => break,
-                                        Err(_) => { /* delay retry and log warning about reconnecting */ },
+                                        Err(_) => {
+                                            /* log warning about reconnecting */
+                                            thread::sleep_ms(1000);
+                                        },
                                     }
                                 };
                                 tx.send(conn.clone());
@@ -313,7 +316,10 @@ impl BaseClientServer {
                                     while true {
                                         match real_conn.connect() {
                                             Ok(_) => break,
-                                            Err(_) => { /* delay retry and log warning */ }
+                                            Err(_) => {
+                                                /* log warning */
+                                                thread::sleep_ms(1000);
+                                            }
                                         }
                                     };
                                 }
