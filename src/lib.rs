@@ -66,7 +66,10 @@ fn send_packet() {
     let mut conn = Connection::new("localost", 4730);
     let data: Box<[u8]> = Box::new([0x00u8]);
     let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
-    conn.sendPacket(p)
+    match conn.sendPacket(p) {
+        Ok(_) => {},
+        Err(_) => panic!("Error in sendPacket."),
+    }
 }
 
 #[test]
@@ -153,16 +156,17 @@ impl Connection {
         return Ok(());
     }
 
-    fn sendPacket(&mut self, packet: Packet) {
+    fn sendPacket(&mut self, packet: Packet) -> io::Result<()> {
         match self.conn {
             Some(ref mut c) => {
                 match packet.code {
-                    PacketCode::REQ => { c.write(&REQ).unwrap(); }
-                    PacketCode::RES => { c.write(&RES).unwrap(); }
+                    PacketCode::REQ => { try!(c.write(&REQ)); }
+                    PacketCode::RES => { try!(c.write(&RES)); }
                 }
-                c.write_u32::<BigEndian>(packet.ptype);
-                c.write_u32::<BigEndian>(packet.data.len() as u32).unwrap();
-                c.write_all(&packet.data).unwrap();
+                try!(c.write_u32::<BigEndian>(packet.ptype));
+                try!(c.write_u32::<BigEndian>(packet.data.len() as u32));
+                try!(c.write_all(&packet.data));
+                Ok(())
             },
             None => panic!("Attempted to send packet on disconnected socket")
         }
@@ -217,9 +221,10 @@ impl Connection {
         data
     }
 
-    fn sendEchoReq(&mut self, mut data: Vec<u8>) {
+    fn sendEchoReq(&mut self, mut data: Vec<u8>) -> io::Result<()> {
         let p = Packet::new(PacketCode::REQ, ECHO_REQ, data.into_boxed_slice());
-        self.sendPacket(p)
+        try!(self.sendPacket(p));
+        Ok(())
     }
 
     fn handleEchoRes(&mut self, mut data: Vec<u8>) {
