@@ -308,8 +308,12 @@ impl BaseClientServer {
                          conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
         /* Run as a dedicated thread to manage the list of active/inactive connections */
         let (new_tx, new_rx) = channel();
+        let mut reconn_thread;
+        let mut conn_thread;
+        let mut host: String;
+        let mut port: u16;
         while bcs.read().unwrap().running {
-            let container: Result<Arc<Mutex<Box<Connection>>>, RecvError>;
+            let container: Result<Arc<Mutex<Box<(String, u16)>>>, RecvError>;
             /* either a new conn is requested, or a new conn is connected */
             select!(
                 container = host_rx.recv() => {
@@ -317,15 +321,20 @@ impl BaseClientServer {
                         Ok(container) => container,
                         Err(_) => panic!("Could not receive in connection manager"),
                     };
-                    let (ref host, port) = **container.lock().unwrap();
+                    let container = container.clone();
+                    {
+                        let ref mut hostport = **container.lock().unwrap();
+                        host = hostport.0.clone();
+                        port = hostport.1;
+                    }
                     let mut insert = false;
                     let conn_tx = conn_tx.clone();
                     let new_tx = new_tx.clone();
                     {
-                        let ac = &bcs.read().unwrap().active_connections;
-                        match ac.get(&(host.clone(), port)) {
+                        match bcs.read().unwrap().active_connections.get(&(host.clone(), port)) {
                             Some(conn) => {
-                                thread::scoped(move || {
+                                let conn = conn.clone();
+                                reconn_thread = thread::scoped(move || {
                                     let mut real_conn = conn.lock().unwrap();
                                     while true {
                                         match real_conn.reconnect() {
@@ -340,7 +349,7 @@ impl BaseClientServer {
                                 });
                             },
                             None => {
-                                thread::scoped(move || {
+                                conn_thread = thread::scoped(move || {
                                     let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                                     {
                                         let mut real_conn = conn.lock().unwrap();
@@ -382,6 +391,7 @@ impl BaseClientServer {
             let mut conn = conn.lock().unwrap();
             conn.disconnect();
         }
+        // scoped threads should join here
     }
 
     fn addServer(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
