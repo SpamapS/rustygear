@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::thread;
 use std::thread::{JoinHandle, sleep_ms, Thread};
-use std::sync::{Mutex, Condvar, Arc};
+use std::sync::{Mutex, RwLock, Condvar, Arc};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Receiver, Sender, RecvError};
 
@@ -88,6 +88,39 @@ fn echo() {
 #[test]
 fn bcs_constructor() {
     let bcs = BaseClientServer::new("clientid".to_string().into_bytes());
+}
+
+#[test]
+fn bcs_run() {
+    println!("Begin");
+    let mut bcs = BaseClientServer::new("clientid".to_string().into_bytes());
+    let mut bcs: Arc<RwLock<BaseClientServer>> = Arc::new(RwLock::new(bcs));
+    let (host_tx, host_rx) = channel();
+    let (conn_tx, conn_rx) = channel();
+    let (stop_cm_tx, stop_cm_rx) = channel();
+    let (stop_pm_tx, stop_pm_rx) = channel();
+    let bcs0 = bcs.clone();
+    let bcs1 = bcs.clone();
+    println!("Starting threads");
+    let tc = thread::spawn(move || {
+        BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx.clone());
+    });
+    println!("Started connection manager");
+    let tp = thread::spawn(move || {
+        BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx.clone(), conn_rx);
+    });
+    println!("Started polling manager");
+    // scoped join
+    thread::sleep_ms(100);
+    (*bcs).write().unwrap().running = false;
+    println!("Sending connection manager stop");
+    stop_cm_tx.send(());
+    println!("Sending polling manager stop");
+    stop_pm_tx.send(());
+    println!("Joining polling manager...");
+    tp.join();
+    println!("Joining connection manager...");
+    tc.join();
 }
 
 
@@ -244,8 +277,6 @@ struct BaseClientServer {
     client_id: Vec<u8>,
     running: bool,
     active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
-    host_io: (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>),
-    conn_io: (Sender<Arc<Mutex<Box<Connection>>>>, Receiver<Arc<Mutex<Box<Connection>>>>),
     hosts: Vec<String>,
 }
 
@@ -256,8 +287,6 @@ impl BaseClientServer {
             client_id: client_id,
             running: true,
             active_connections: HashMap::new(),
-            host_io: channel(),
-            conn_io: channel(),
             hosts: Vec::new(),
         }
     }
@@ -273,60 +302,63 @@ impl BaseClientServer {
     */
 
     #[allow(unstable)]
-    fn connectionManager(&mut self) {
+    fn connectionManager(bcs: Arc<RwLock<BaseClientServer>>,
+                         stop_rx: Receiver<()>,
+                         host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
+                         conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
         /* Run as a dedicated thread to manage the list of active/inactive connections */
-        let (_, ref mut rx) = self.host_io;
-        let (ref mut tx, _) = self.conn_io;
         let (new_tx, new_rx) = channel();
-        let ac = &mut self.active_connections;
-        while self.running {
+        while bcs.read().unwrap().running {
             let container: Result<Arc<Mutex<Box<Connection>>>, RecvError>;
             /* either a new conn is requested, or a new conn is connected */
             select!(
-                container = rx.recv() => {
+                container = host_rx.recv() => {
                     let container = match container {
                         Ok(container) => container,
                         Err(_) => panic!("Could not receive in connection manager"),
                     };
                     let (ref host, port) = **container.lock().unwrap();
                     let mut insert = false;
-                    let tx = tx.clone();
+                    let conn_tx = conn_tx.clone();
                     let new_tx = new_tx.clone();
-                    match ac.get(&(host.clone(), port)) {
-                        Some(conn) => {
-                            thread::scoped(move || {
-                                let mut real_conn = conn.lock().unwrap();
-                                while true {
-                                    match real_conn.reconnect() {
-                                        Ok(_) => break,
-                                        Err(_) => {
-                                            /* log warning about reconnecting */
-                                            thread::sleep_ms(1000);
-                                        },
-                                    }
-                                };
-                                tx.send(conn.clone());
-                            });
-                        },
-                        None => {
-                            thread::scoped(move || {
-                                let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
-                                {
+                    {
+                        let ac = &bcs.read().unwrap().active_connections;
+                        match ac.get(&(host.clone(), port)) {
+                            Some(conn) => {
+                                thread::scoped(move || {
                                     let mut real_conn = conn.lock().unwrap();
                                     while true {
-                                        match real_conn.connect() {
+                                        match real_conn.reconnect() {
                                             Ok(_) => break,
                                             Err(_) => {
-                                                /* log warning */
+                                                /* log warning about reconnecting */
                                                 thread::sleep_ms(1000);
-                                            }
+                                            },
                                         }
                                     };
-                                }
-                                new_tx.send(conn.clone());
-                            });
-                        }
-                    };
+                                    conn_tx.send(conn.clone());
+                                });
+                            },
+                            None => {
+                                thread::scoped(move || {
+                                    let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
+                                    {
+                                        let mut real_conn = conn.lock().unwrap();
+                                        while true {
+                                            match real_conn.connect() {
+                                                Ok(_) => break,
+                                                Err(_) => {
+                                                    /* log warning */
+                                                    thread::sleep_ms(1000);
+                                                }
+                                            }
+                                        };
+                                    }
+                                    new_tx.send(conn.clone());
+                                });
+                            }
+                        };
+                    } // unlock bcs
                 },
                 conn = new_rx.recv() => {
                     let conn = match conn {
@@ -336,44 +368,54 @@ impl BaseClientServer {
                     {
                         let ref real_conn = **conn.lock().unwrap();
                         let host = real_conn.host.clone();
-                        ac.insert((host, real_conn.port), conn.clone());
+                        {
+                            let ac = &mut bcs.write().unwrap().active_connections;
+                            ac.insert((host, real_conn.port), conn.clone());
+                        }
                     }
-                    tx.send(conn.clone());
-                }
+                    conn_tx.send(conn.clone());
+                },
+                _ = stop_rx.recv() => { break }
             )
         }
-        for (_, conn) in ac.iter() {
+        for (_, conn) in bcs.read().unwrap().active_connections.iter() {
             let mut conn = conn.lock().unwrap();
             conn.disconnect();
         }
     }
 
-    fn addServer(&self, host: String, port: u16) {
-        let (ref tx, _) = self.host_io;
-        tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
+    fn addServer(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
+        host_tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
     }
 
-    fn pollingManager(&self) {
-        let (_, ref rx) = self.conn_io;
-        let (ref tx, _) = self.host_io;
+    fn pollingManager(bcs: Arc<RwLock<BaseClientServer>>,
+                      stop_rx: Receiver<()>,
+                      host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>,
+                      conn_rx: Receiver<Arc<Mutex<Box<Connection>>>>) {
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
-        while self.running {
-            let conn = rx.recv().unwrap();
-            let tx = tx.clone();
-            // poll this conn
-            threads.push(thread::spawn(move || {
-                while true {
-                    let mut conn = conn.lock().unwrap();
-                    match conn.readPacket() {
-                        Ok(p) => { /* handle packet */ },
-                        Err(e) => {
-                            /* Log failure */
-                            tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
-                            break;
+        while bcs.read().unwrap().running {
+            let conn: Result<Arc<Mutex<Box<Connection>>>, RecvError>;
+            select!(
+                conn = conn_rx.recv() => {
+                    let conn = conn.unwrap();
+                    let host_tx = host_tx.clone();
+                    // poll this conn
+                    threads.push(thread::spawn(move || {
+                        while true {
+                            let mut conn = conn.lock().unwrap();
+                            match conn.readPacket() {
+                                Ok(p) => { /* handle packet */ },
+                                Err(e) => {
+                                    /* Log failure */
+                                    host_tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
+                                    break;
+                                }
+                            }
                         }
-                    }
-                }
-            }));
+                    }));
+                },
+                _ = stop_rx.recv() => { break }
+            );
         };
         // scoped threads all joined here
         for mut thread in threads {
