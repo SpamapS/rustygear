@@ -66,9 +66,9 @@ fn send_packet() {
     let mut conn = Connection::new("localost", 4730);
     let data: Box<[u8]> = Box::new([0x00u8]);
     let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
-    match conn.sendPacket(p) {
+    match conn.send_packet(p) {
         Ok(_) => {},
-        Err(_) => panic!("Error in sendPacket."),
+        Err(_) => panic!("Error in send_packet."),
     }
 }
 
@@ -175,7 +175,7 @@ impl Connection {
         return Ok(());
     }
 
-    fn sendPacket(&mut self, packet: Packet) -> io::Result<()> {
+    fn send_packet(&mut self, packet: Packet) -> io::Result<()> {
         match self.conn {
             Some(ref mut c) => {
                 match packet.code {
@@ -200,7 +200,7 @@ impl Connection {
         return Err("Invalid packet code");
     }
 
-    fn readPacket(&mut self) -> io::Result<Packet> {
+    fn read_packet(&mut self) -> io::Result<Packet> {
         match self.conn {
             Some(ref mut c) => {
                 let mut code: Vec<u8> = Vec::new();
@@ -227,7 +227,7 @@ impl Connection {
         let lock_cond = Arc::new((Mutex::new(false), Condvar::new()));
         let &(ref lock, ref cond) = &*lock_cond;
         let mut handled_echo = lock.lock().unwrap();
-        self.sendEchoReq(data.clone());
+        self.send_echo_req(data.clone());
         self.echo_conditions.insert(data.clone(), lock_cond.clone());
         if !*cond.wait_timeout_ms(handled_echo, timeout * 1000).unwrap().0 {
             panic!("Timed out waiting for response from echo.");
@@ -236,13 +236,13 @@ impl Connection {
         data
     }
 
-    fn sendEchoReq(&mut self, mut data: Vec<u8>) -> io::Result<()> {
+    fn send_echo_req(&mut self, mut data: Vec<u8>) -> io::Result<()> {
         let p = Packet::new(PacketCode::REQ, ECHO_REQ, data.into_boxed_slice());
-        try!(self.sendPacket(p));
+        try!(self.send_packet(p));
         Ok(())
     }
 
-    fn handleEchoRes(&mut self, mut data: Vec<u8>) {
+    fn handle_echo_res(&mut self, mut data: Vec<u8>) {
         if let Some(mutexlock) = self.echo_conditions.get_mut(&data) {
             let lock = &mutexlock.0;
             let cond = &mutexlock.1;
@@ -296,10 +296,10 @@ impl BaseClientServer {
         {
             let ref mut bcs = bcs.write().unwrap();
             threads.push(thread::spawn(move || {
-                BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
             }));
             threads.push(thread::spawn(move || {
-                BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx, conn_rx);
+                BaseClientServer::polling_manager(bcs1, stop_pm_rx, host_tx, conn_rx);
             }));
         };
         (bcs, threads)
@@ -323,7 +323,7 @@ impl BaseClientServer {
     }
 
     #[allow(unstable)]
-    fn connectionManager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
+    fn connection_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                          stop_rx: Receiver<()>,
                          host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
                          conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
@@ -415,11 +415,11 @@ impl BaseClientServer {
         // scoped threads should join here
     }
 
-    fn addServer(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
+    fn add_server(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
         host_tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
     }
 
-    fn pollingManager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
+    fn polling_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                       stop_rx: Receiver<()>,
                       host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>,
                       conn_rx: Receiver<Arc<Mutex<Box<Connection>>>>) {
@@ -434,7 +434,7 @@ impl BaseClientServer {
                     threads.push(thread::spawn(move || {
                         while true {
                             let mut conn = conn.lock().unwrap();
-                            match conn.readPacket() {
+                            match conn.read_packet() {
                                 Ok(p) => { /* handle packet */ },
                                 Err(e) => {
                                     /* Log failure */
