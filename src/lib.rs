@@ -214,12 +214,7 @@ impl Connection {
                 let mut datastream = c.take(datalen as u64);
                 let mut buf: Vec<u8> = Vec::new();
                 try!(datastream.read_to_end(&mut buf));
-                Ok(
-                    Packet {
-                        code: code,
-                        ptype: ptype,
-                        data: buf.into_boxed_slice(),
-                    })
+                Ok(Packet::new(code, ptype, buf.into_boxed_slice()))
             },
             None => panic!("Attempted to read packet on disconnected socket")
         }
