@@ -93,14 +93,20 @@ fn bcs_constructor() {
 #[test]
 fn bcs_run() {
     println!("Begin");
-    let mut bcs = BaseClientServer::run("clientid".to_string().into_bytes());
+    let (mut bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes());
     println!("Started");
     let mut bcs0 = bcs.clone();
     let mut bcs1 = bcs.clone();
     println!("Waiting 100ms");
     thread::sleep_ms(100);
     (*bcs).write().unwrap().running = false;
-    bcs.read().unwrap().stop();
+    {
+        let bcs = &bcs.read().unwrap();
+        bcs.stop();
+    }
+    for thread in threads {
+        thread.join();
+    }
 }
 
 
@@ -277,7 +283,7 @@ impl BaseClientServer {
         }
     }
 
-    fn run(client_id: Vec<u8>) -> Arc<RwLock<Box<BaseClientServer>>> {
+    fn run(client_id: Vec<u8>) -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>) {
         let mut bcs = Box::new(BaseClientServer::new(client_id));
         let (host_tx, host_rx): (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>) = channel();
         let (conn_tx, conn_rx) = channel();
@@ -291,13 +297,17 @@ impl BaseClientServer {
         let bcs1 = bcs.clone();
         let conn_tx = conn_tx.clone();
         let host_tx = host_tx.clone();
-        thread::spawn(move || {
-            BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx);
-        });
-        thread::spawn(move || {
-            BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx, conn_rx);
-        });
-        bcs
+        let mut threads = Vec::new();
+        {
+            let ref mut bcs = bcs.write().unwrap();
+            threads.push(thread::spawn(move || {
+                BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx);
+            }));
+            threads.push(thread::spawn(move || {
+                BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx, conn_rx);
+            }));
+        };
+        (bcs, threads)
     }
 
     fn stop(&self) {
