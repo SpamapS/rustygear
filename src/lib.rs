@@ -100,24 +100,7 @@ fn bcs_run() {
     println!("Waiting 100ms");
     thread::sleep_ms(100);
     (*bcs).write().unwrap().running = false;
-    println!("Sending connection manager stop");
-    {
-        let stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = bcs0.read().unwrap().stop_cm_tx.clone();
-        match stop_cm_tx {
-            Some(stop_cm_tx) => { stop_cm_tx.lock().unwrap().send(()); },
-            None => { panic!("No stop cm channel"); },
-        }
-    }
-    println!("Sending polling manager stop");
-    {
-        let stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = bcs1.read().unwrap().stop_cm_tx.clone();
-        match stop_pm_tx {
-            Some(stop_pm_tx) => { stop_pm_tx.lock().unwrap().send(()); },
-            None => { panic!("No stop pm channel"); },
-        }
-    }
-    //println!("Joining polling manager...");
-    //println!("Joining connection manager...");
+    bcs.read().unwrap().stop();
 }
 
 
@@ -315,6 +298,23 @@ impl BaseClientServer {
             BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx, conn_rx);
         });
         bcs
+    }
+
+    fn stop(&self) {
+        {
+            let stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = self.stop_cm_tx.clone();
+            match stop_cm_tx {
+                Some(stop_cm_tx) => { stop_cm_tx.lock().unwrap().send(()); },
+                None => { panic!("No stop cm channel"); },
+            }
+        }
+        {
+            let stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = self.stop_cm_tx.clone();
+            match stop_pm_tx {
+                Some(stop_pm_tx) => { stop_pm_tx.lock().unwrap().send(()); },
+                None => { panic!("No stop pm channel"); },
+            }
+        }
     }
 
     #[allow(unstable)]
