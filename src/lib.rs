@@ -93,34 +93,31 @@ fn bcs_constructor() {
 #[test]
 fn bcs_run() {
     println!("Begin");
-    let mut bcs = BaseClientServer::new("clientid".to_string().into_bytes());
-    let mut bcs: Arc<RwLock<BaseClientServer>> = Arc::new(RwLock::new(bcs));
-    let (host_tx, host_rx) = channel();
-    let (conn_tx, conn_rx) = channel();
-    let (stop_cm_tx, stop_cm_rx) = channel();
-    let (stop_pm_tx, stop_pm_rx) = channel();
-    let bcs0 = bcs.clone();
-    let bcs1 = bcs.clone();
-    println!("Starting threads");
-    let tc = thread::spawn(move || {
-        BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx.clone());
-    });
-    println!("Started connection manager");
-    let tp = thread::spawn(move || {
-        BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx.clone(), conn_rx);
-    });
-    println!("Started polling manager");
-    // scoped join
+    let mut bcs = BaseClientServer::run("clientid".to_string().into_bytes());
+    println!("Started");
+    let mut bcs0 = bcs.clone();
+    let mut bcs1 = bcs.clone();
+    println!("Waiting 100ms");
     thread::sleep_ms(100);
     (*bcs).write().unwrap().running = false;
     println!("Sending connection manager stop");
-    stop_cm_tx.send(());
+    {
+        let stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = bcs0.read().unwrap().stop_cm_tx.clone();
+        match stop_cm_tx {
+            Some(stop_cm_tx) => { stop_cm_tx.lock().unwrap().send(()); },
+            None => { panic!("No stop cm channel"); },
+        }
+    }
     println!("Sending polling manager stop");
-    stop_pm_tx.send(());
-    println!("Joining polling manager...");
-    tp.join();
-    println!("Joining connection manager...");
-    tc.join();
+    {
+        let stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>> = bcs1.read().unwrap().stop_cm_tx.clone();
+        match stop_pm_tx {
+            Some(stop_pm_tx) => { stop_pm_tx.lock().unwrap().send(()); },
+            None => { panic!("No stop pm channel"); },
+        }
+    }
+    //println!("Joining polling manager...");
+    //println!("Joining connection manager...");
 }
 
 
@@ -278,6 +275,9 @@ struct BaseClientServer {
     running: bool,
     active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
     hosts: Vec<String>,
+    stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
+    stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
+    host_tx: Option<Arc<Mutex<Box<Sender<Arc<Mutex<Box<(String, u16)>>>>>>>>,
 }
 
 impl BaseClientServer {
@@ -288,21 +288,37 @@ impl BaseClientServer {
             running: true,
             active_connections: HashMap::new(),
             hosts: Vec::new(),
+            stop_cm_tx: None,
+            stop_pm_tx: None,
+            host_tx: None,
         }
     }
 
-    /*
-    fn start(mut self) {
-        let mut bcs_poll_handle = Arc::new(Mutex::new(&mut self));
-        let mut bcs_conn_handle = bcs_poll_handle.clone();
-        let poll_join_handle = Some(thread::scoped(move || BaseClientServer::_doPollLoop(bcs_poll_handle)));
-        let connect_join_handle = Some(thread::scoped(move || BaseClientServer::_doConnectLoop(bcs_conn_handle)));
-        // implicit join
+    fn run(client_id: Vec<u8>) -> Arc<RwLock<Box<BaseClientServer>>> {
+        let mut bcs = Box::new(BaseClientServer::new(client_id));
+        let (host_tx, host_rx): (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>) = channel();
+        let (conn_tx, conn_rx) = channel();
+        let (stop_cm_tx, stop_cm_rx) = channel();
+        let (stop_pm_tx, stop_pm_rx) = channel();
+        bcs.stop_cm_tx = Some(Arc::new(Mutex::new(Box::new(stop_cm_tx.clone()))));
+        bcs.stop_pm_tx = Some(Arc::new(Mutex::new(Box::new(stop_pm_tx.clone()))));
+        bcs.host_tx = Some(Arc::new(Mutex::new(Box::new(host_tx.clone()))));
+        let mut bcs: Arc<RwLock<Box<BaseClientServer>>> = Arc::new(RwLock::new(bcs));
+        let bcs0 = bcs.clone();
+        let bcs1 = bcs.clone();
+        let conn_tx = conn_tx.clone();
+        let host_tx = host_tx.clone();
+        thread::spawn(move || {
+            BaseClientServer::connectionManager(bcs0, stop_cm_rx, host_rx, conn_tx);
+        });
+        thread::spawn(move || {
+            BaseClientServer::pollingManager(bcs1, stop_pm_rx, host_tx, conn_rx);
+        });
+        bcs
     }
-    */
 
     #[allow(unstable)]
-    fn connectionManager(bcs: Arc<RwLock<BaseClientServer>>,
+    fn connectionManager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                          stop_rx: Receiver<()>,
                          host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
                          conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
@@ -398,7 +414,7 @@ impl BaseClientServer {
         host_tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
     }
 
-    fn pollingManager(bcs: Arc<RwLock<BaseClientServer>>,
+    fn pollingManager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                       stop_rx: Receiver<()>,
                       host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>,
                       conn_rx: Receiver<Arc<Mutex<Box<Connection>>>>) {
