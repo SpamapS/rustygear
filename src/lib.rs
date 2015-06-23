@@ -11,9 +11,8 @@ use std::io::Read;
 use std::io;
 use std::net::TcpStream;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::thread;
-use std::thread::{JoinHandle, sleep_ms, Thread};
+use std::thread::{JoinHandle, sleep_ms};
 use std::sync::{Mutex, RwLock, Condvar, Arc};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Receiver, Sender, RecvError};
@@ -226,7 +225,7 @@ impl Connection {
         }
         let lock_cond = Arc::new((Mutex::new(false), Condvar::new()));
         let &(ref lock, ref cond) = &*lock_cond;
-        let mut handled_echo = lock.lock().unwrap();
+        let handled_echo = lock.lock().unwrap();
         self.send_echo_req(data.clone());
         self.echo_conditions.insert(data.clone(), lock_cond.clone());
         if !*cond.wait_timeout_ms(handled_echo, timeout * 1000).unwrap().0 {
@@ -322,7 +321,6 @@ impl BaseClientServer {
         }
     }
 
-    #[allow(unstable)]
     fn connection_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                          stop_rx: Receiver<()>,
                          host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
@@ -348,7 +346,6 @@ impl BaseClientServer {
                         host = hostport.0.clone();
                         port = hostport.1;
                     }
-                    let mut insert = false;
                     let conn_tx = conn_tx.clone();
                     let new_tx = new_tx.clone();
                     {
@@ -357,7 +354,7 @@ impl BaseClientServer {
                                 let conn = conn.clone();
                                 reconn_thread = thread::scoped(move || {
                                     let mut real_conn = conn.lock().unwrap();
-                                    while true {
+                                    loop {
                                         match real_conn.reconnect() {
                                             Ok(_) => break,
                                             Err(_) => {
@@ -374,7 +371,7 @@ impl BaseClientServer {
                                     let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                                     {
                                         let mut real_conn = conn.lock().unwrap();
-                                        while true {
+                                        loop {
                                             match real_conn.connect() {
                                                 Ok(_) => break,
                                                 Err(_) => {
@@ -432,11 +429,11 @@ impl BaseClientServer {
                     let host_tx = host_tx.clone();
                     // poll this conn
                     threads.push(thread::spawn(move || {
-                        while true {
+                        loop {
                             let mut conn = conn.lock().unwrap();
                             match conn.read_packet() {
                                 Ok(p) => { /* handle packet */ },
-                                Err(e) => {
+                                Err(_) => {
                                     /* Log failure */
                                     host_tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
                                     break;
@@ -449,7 +446,7 @@ impl BaseClientServer {
             );
         };
         // scoped threads all joined here
-        for mut thread in threads {
+        for thread in threads {
             thread.join();
         }
     }
