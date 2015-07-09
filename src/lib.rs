@@ -93,6 +93,18 @@ fn bcs_constructor() {
 }
 
 #[test]
+#[should_panic]
+fn bcs_select_connection() {
+    let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes());
+    let mut bcs = bcs.write().unwrap();
+    bcs.select_connection("some string".to_string());
+    bcs.stop();
+    for thread in threads {
+        thread.join();
+    }
+}
+
+#[test]
 fn bcs_run() {
     println!("Begin");
     let (mut bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes());
@@ -490,6 +502,15 @@ impl BaseClientServer {
                 let handler = handler.clone();
                 handler.lock().unwrap().handle_packet(packet);
             }
+        }
+    }
+
+    // mutable self because active_ring.get_node wants mutable
+    fn select_connection(&mut self, key: String) -> Arc<Mutex<Box<Connection>>> {
+        let nodeinfo = self.active_ring.get_node(key);
+        match self.active_connections.get(nodeinfo) {
+            Some(conn) => { conn.clone() },
+            None => panic!("Hash ring contains non-existant node!"),
         }
     }
 
