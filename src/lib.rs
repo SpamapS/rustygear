@@ -98,7 +98,6 @@ fn bcs_run() {
     let mut bcs1 = bcs.clone();
     println!("Waiting 100ms");
     thread::sleep_ms(100);
-    (*bcs).write().unwrap().running = false;
     {
         let bcs = &bcs.read().unwrap();
         bcs.stop();
@@ -259,7 +258,6 @@ trait HandlePacket: Send {
 
 struct BaseClientServer {
     client_id: Vec<u8>,
-    running: bool,
     active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
     hosts: Vec<String>,
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
@@ -273,7 +271,6 @@ impl BaseClientServer {
     fn new(client_id: Vec<u8>) -> BaseClientServer {
         BaseClientServer {
             client_id: client_id,
-            running: true,
             active_connections: HashMap::new(),
             hosts: Vec::new(),
             stop_cm_tx: None,
@@ -336,7 +333,7 @@ impl BaseClientServer {
         let mut conn_thread;
         let mut host: String;
         let mut port: u16;
-        while bcs.read().unwrap().running {
+        loop {
             let container: Result<Arc<Mutex<Box<(String, u16)>>>, RecvError>;
             /* either a new conn is requested, or a new conn is connected */
             select!(
