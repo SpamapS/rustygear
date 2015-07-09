@@ -253,6 +253,10 @@ impl Connection {
     }
 }
 
+trait HandlePacket: Send {
+    fn handle_packet(&self, packet: Packet);
+}
+
 struct BaseClientServer {
     client_id: Vec<u8>,
     running: bool,
@@ -261,6 +265,7 @@ struct BaseClientServer {
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
     stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
     host_tx: Option<Arc<Mutex<Box<Sender<Arc<Mutex<Box<(String, u16)>>>>>>>>,
+    handler: Option<Arc<Mutex<Box<HandlePacket + Send>>>>,
 }
 
 impl BaseClientServer {
@@ -274,6 +279,7 @@ impl BaseClientServer {
             stop_cm_tx: None,
             stop_pm_tx: None,
             host_tx: None,
+            handler: None,
         }
     }
 
@@ -293,7 +299,6 @@ impl BaseClientServer {
         let host_tx = host_tx.clone();
         let mut threads = Vec::new();
         {
-            let ref mut bcs = bcs.write().unwrap();
             threads.push(thread::spawn(move || {
                 BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
             }));
@@ -421,18 +426,22 @@ impl BaseClientServer {
                       host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>,
                       conn_rx: Receiver<Arc<Mutex<Box<Connection>>>>) {
         let mut threads: Vec<JoinHandle<()>> = Vec::new();
-        while bcs.read().unwrap().running {
+        let bcs = bcs.clone();
+        loop {
             let conn: Result<Arc<Mutex<Box<Connection>>>, RecvError>;
             select!(
                 conn = conn_rx.recv() => {
                     let conn = conn.unwrap();
                     let host_tx = host_tx.clone();
                     // poll this conn
+                    let bcs = bcs.clone();
                     threads.push(thread::spawn(move || {
                         loop {
                             let mut conn = conn.lock().unwrap();
                             match conn.read_packet() {
-                                Ok(p) => { /* handle packet */ },
+                                Ok(p) => {
+                                    bcs.read().unwrap().handle_packet(p);
+                                }
                                 Err(_) => {
                                     /* Log failure */
                                     host_tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
@@ -448,6 +457,16 @@ impl BaseClientServer {
         // scoped threads all joined here
         for thread in threads {
             thread.join();
+        }
+    }
+
+    fn handle_packet(&self, packet: Packet) {
+        match self.handler {
+            None => return,
+            Some(ref handler) => {
+                let handler = handler.clone();
+                handler.lock().unwrap().handle_packet(packet);
+            }
         }
     }
 }
