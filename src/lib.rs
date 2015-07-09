@@ -3,6 +3,7 @@
 extern crate time;
 extern crate byteorder;
 extern crate uuid;
+extern crate hash_ring;
 
 use std::option::Option;
 use std::cmp::Ordering;
@@ -20,6 +21,8 @@ use std::sync::mpsc::{Receiver, Sender, RecvError};
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
 use uuid::Uuid;
+
+use hash_ring::HashRing;
 
 pub mod constants;
 use constants::*;
@@ -111,6 +114,18 @@ fn bcs_run() {
 #[derive(PartialEq)]
 enum ConnectionState {
     INIT,
+}
+
+#[derive(Clone)]
+struct NodeInfo {
+    host: String,
+    port: u16,
+}
+
+impl ToString for NodeInfo {
+    fn to_string(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
 }
 
 struct Connection {
@@ -259,6 +274,7 @@ trait HandlePacket: Send {
 struct BaseClientServer {
     client_id: Vec<u8>,
     active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
+    active_ring: HashRing<NodeInfo>,
     hosts: Vec<String>,
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
     stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
@@ -272,6 +288,7 @@ impl BaseClientServer {
         BaseClientServer {
             client_id: client_id,
             active_connections: HashMap::new(),
+            active_ring: HashRing::new(Vec::new(), 1),
             hosts: Vec::new(),
             stop_cm_tx: None,
             stop_pm_tx: None,
@@ -353,6 +370,8 @@ impl BaseClientServer {
                     {
                         match bcs.read().unwrap().active_connections.get(&(host.clone(), port)) {
                             Some(conn) => {
+                                // stop sending things to it
+                                bcs.write().unwrap().active_ring.remove_node(&NodeInfo{host: host.clone(), port: port});
                                 let conn = conn.clone();
                                 reconn_thread = thread::scoped(move || {
                                     let mut real_conn = conn.lock().unwrap();
@@ -398,8 +417,10 @@ impl BaseClientServer {
                         let ref real_conn = **conn.lock().unwrap();
                         let host = real_conn.host.clone();
                         {
-                            let ac = &mut bcs.write().unwrap().active_connections;
-                            ac.insert((host, real_conn.port), conn.clone());
+                            let bcs = &mut bcs.write().unwrap();
+                            let host = host.clone();
+                            bcs.active_connections.insert((host.clone(), real_conn.port), conn.clone());
+                            bcs.active_ring.add_node(&NodeInfo{ host: host, port: real_conn.port});
                         }
                     }
                     conn_tx.send(conn.clone());
@@ -466,6 +487,7 @@ impl BaseClientServer {
             }
         }
     }
+
 }
 
 
