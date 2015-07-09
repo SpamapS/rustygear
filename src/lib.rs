@@ -117,6 +117,9 @@ enum ConnectionState {
 }
 
 #[derive(Clone)]
+#[derive(Eq)]
+#[derive(PartialEq)]
+#[derive(Hash)]
 struct NodeInfo {
     host: String,
     port: u16,
@@ -273,7 +276,7 @@ trait HandlePacket: Send {
 
 struct BaseClientServer {
     client_id: Vec<u8>,
-    active_connections: HashMap<(String, u16), Arc<Mutex<Box<Connection>>>>,
+    active_connections: HashMap<NodeInfo, Arc<Mutex<Box<Connection>>>>,
     active_ring: HashRing<NodeInfo>,
     hosts: Vec<String>,
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
@@ -368,7 +371,8 @@ impl BaseClientServer {
                     let conn_tx = conn_tx.clone();
                     let new_tx = new_tx.clone();
                     {
-                        match bcs.read().unwrap().active_connections.get(&(host.clone(), port)) {
+                        let nodeinfo = NodeInfo { host: host.clone(), port: port };
+                        match bcs.read().unwrap().active_connections.get(&nodeinfo) {
                             Some(conn) => {
                                 // stop sending things to it
                                 bcs.write().unwrap().active_ring.remove_node(&NodeInfo{host: host.clone(), port: port});
@@ -419,8 +423,9 @@ impl BaseClientServer {
                         {
                             let bcs = &mut bcs.write().unwrap();
                             let host = host.clone();
-                            bcs.active_connections.insert((host.clone(), real_conn.port), conn.clone());
-                            bcs.active_ring.add_node(&NodeInfo{ host: host, port: real_conn.port});
+                            let nodeinfo = NodeInfo{ host: host, port: real_conn.port };
+                            bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
+                            bcs.active_ring.add_node(&nodeinfo);
                         }
                     }
                     conn_tx.send(conn.clone());
