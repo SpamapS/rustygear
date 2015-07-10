@@ -97,6 +97,8 @@ fn bcs_constructor() {
 fn bcs_select_connection() {
     let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes());
     let mut bcs = bcs.write().unwrap();
+    println!("Waiting 100ms for connections");
+    bcs.wait_for_connection(Some(100)).unwrap();
     bcs.select_connection("some string".to_string());
     bcs.stop();
     for thread in threads {
@@ -289,6 +291,7 @@ trait HandlePacket: Send {
 struct BaseClientServer {
     client_id: Vec<u8>,
     active_connections: HashMap<NodeInfo, Arc<Mutex<Box<Connection>>>>,
+    active_connections_cond: Arc<(Mutex<bool>, Condvar)>,
     active_ring: HashRing<NodeInfo>,
     hosts: Vec<String>,
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
@@ -303,6 +306,7 @@ impl BaseClientServer {
         BaseClientServer {
             client_id: client_id,
             active_connections: HashMap::new(),
+            active_connections_cond: Arc::new((Mutex::new(false), Condvar::new())),
             active_ring: HashRing::new(Vec::new(), 1),
             hosts: Vec::new(),
             stop_cm_tx: None,
@@ -438,6 +442,10 @@ impl BaseClientServer {
                             let nodeinfo = NodeInfo{ host: host, port: real_conn.port };
                             bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
                             bcs.active_ring.add_node(&nodeinfo);
+                            let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
+                            let mut available = lock.lock().unwrap();
+                            *available = true;
+                            cvar.notify_all();
                         }
                     }
                     conn_tx.send(conn.clone());
@@ -503,6 +511,27 @@ impl BaseClientServer {
                 handler.lock().unwrap().handle_packet(packet);
             }
         }
+    }
+
+    fn wait_for_connection(&self, timeout: Option<u32>) -> Result<bool, &'static str> {
+        // will wait until there are perceived active connections
+        let &(ref lock, ref cvar) = &*self.active_connections_cond;
+        let mut available = lock.lock().unwrap();
+        while !*available {
+            match timeout {
+                Some(timeout) => {
+                    let wait_result = cvar.wait_timeout_ms(available, timeout).unwrap();
+                    if wait_result.1 {
+                        return Err("Timed out waiting for connections")
+                    }
+                    available = wait_result.0;
+                },
+                None => {
+                    available = cvar.wait(available).unwrap();
+                }
+            }
+        }
+        Ok(true)
     }
 
     // mutable self because active_ring.get_node wants mutable
