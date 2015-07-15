@@ -1,5 +1,6 @@
 #![feature(mpsc_select)]
 #![feature(scoped)]
+#![feature(ip_addr)]
 extern crate time;
 extern crate byteorder;
 extern crate uuid;
@@ -10,7 +11,7 @@ use std::cmp::Ordering;
 use std::io::Write;
 use std::io::Read;
 use std::io;
-use std::net::TcpStream;
+use std::net::{TcpStream, TcpListener};
 use std::collections::HashMap;
 use std::thread;
 use std::thread::{JoinHandle, sleep_ms};
@@ -93,9 +94,24 @@ fn bcs_constructor() {
 }
 
 #[test]
+fn bcs_run_server() {
+    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec!["127.0.0.1:0"]));
+    println!("Waiting 100ms for server");
+    thread::sleep_ms(100);
+    {
+        let mut bcs = bcs.read().unwrap();
+        bcs.stop();
+    }
+    for thread in threads {
+        thread.join();
+    }
+}
+
+
+#[test]
 #[should_panic]
 fn bcs_select_connection() {
-    let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes());
+    let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes(), None);
     let mut bcs = bcs.write().unwrap();
     println!("Waiting 100ms for connections");
     bcs.wait_for_connection(Some(100)).unwrap();
@@ -109,7 +125,7 @@ fn bcs_select_connection() {
 #[test]
 fn bcs_run() {
     println!("Begin");
-    let (mut bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes());
+    let (mut bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes(), None);
     println!("Started");
     let mut bcs0 = bcs.clone();
     let mut bcs1 = bcs.clone();
@@ -128,6 +144,7 @@ fn bcs_run() {
 #[derive(PartialEq)]
 enum ConnectionState {
     INIT,
+    CONNECTED,
 }
 
 #[derive(Clone)]
@@ -175,6 +192,19 @@ impl Connection {
         c.change_state(ConnectionState::INIT);
         return c
     }
+
+    fn new_incoming(host: &str, port: u16, conn: TcpStream) -> Connection {
+        Connection {
+            host: host.to_string(),
+            port: port,
+            conn: Some(conn),
+            connect_time: Some(time::now_utc()),
+            state: ConnectionState::CONNECTED,
+            state_time: Some(time::now_utc()),
+            echo_conditions: HashMap::new(),
+        }
+    }
+
 
     fn change_state(&mut self, state: ConnectionState) {
         self.state_time = Some(time::now_utc());
@@ -298,6 +328,7 @@ struct BaseClientServer {
     stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
     host_tx: Option<Arc<Mutex<Box<Sender<Arc<Mutex<Box<(String, u16)>>>>>>>>,
     handler: Option<Arc<Mutex<Box<HandlePacket + Send>>>>,
+    binds: Option<Arc<Mutex<Box<Vec<ToSocketAddrs>>>>>,
 }
 
 impl BaseClientServer {
@@ -313,10 +344,12 @@ impl BaseClientServer {
             stop_pm_tx: None,
             host_tx: None,
             handler: None,
+            binds: None,
         }
     }
 
-    fn run(client_id: Vec<u8>) -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>) {
+    /// Runs the client or server threads associated with this BCS
+    fn run(client_id: Vec<u8>, binds: Option<Vec<ToSocketAddrs>>) -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>) {
         let mut bcs = Box::new(BaseClientServer::new(client_id));
         let (host_tx, host_rx): (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>) = channel();
         let (conn_tx, conn_rx) = channel();
@@ -332,9 +365,17 @@ impl BaseClientServer {
         let host_tx = host_tx.clone();
         let mut threads = Vec::new();
         {
-            threads.push(thread::spawn(move || {
-                BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
-            }));
+            match binds {
+            Some(binds) => {
+                *bcs0.read().unwrap().binds.lock().unwrap() = binds;
+                threads.push(thread::spawn(move || {
+                    BaseClientServer::listen_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                }));
+            } else {
+                threads.push(thread::spawn(move || {
+                    BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                }));
+            }
             threads.push(thread::spawn(move || {
                 BaseClientServer::polling_manager(bcs1, stop_pm_rx, host_tx, conn_rx);
             }));
@@ -458,6 +499,38 @@ impl BaseClientServer {
             conn.disconnect();
         }
         // scoped threads should join here
+    }
+
+    /// Listens for new connections. Server complement to connection_manager
+    fn listen_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
+                      stop_rx: Receiver<()>,
+                      host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
+                      conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
+        let listener_thread = thread::spawn(move || {
+            let listener = TcpListener::bind("0.0.0.0:4730").unwrap();
+            for stream in listener.incoming() {
+                let conn_tx = conn_tx.clone();
+                let bcs = bcs.clone();
+                let in_thread = thread::scoped(move || {
+                    let stream = stream.unwrap();
+                    let peer_addr = stream.peer_addr().unwrap();
+                    let host = format!("{}", peer_addr.ip());
+                    let bcs = &mut bcs.write().unwrap();
+                    let nodeinfo = NodeInfo{ host: host.clone(), port: peer_addr.port() };
+                    let conn = Arc::new(Mutex::new(Box::new(Connection::new_incoming(&host[..], peer_addr.port(), stream))));
+                    bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
+                    // no need for filling active_ring it's not used in servers
+                    let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
+                    let mut available = lock.lock().unwrap();
+                    *available = true;
+                    cvar.notify_all();
+                    conn_tx.send(conn.clone());
+                });
+            }
+        });
+        // No joining, just accept the explosion because TcpListener has no
+        // real way to be interrupted.
+        let _ = stop_rx.recv().unwrap();
     }
 
     fn add_server(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
