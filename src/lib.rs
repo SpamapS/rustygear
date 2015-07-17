@@ -104,10 +104,12 @@ fn bcs_run_server() {
         println!("Stopping bcs...");
         bcs.stop();
     }
-    println!("Joining threads...");
+    /* XXX this has problems because of uninterruptible TcpListener
+    println!("Joining {} threads...", threads.len());
     for thread in threads {
         thread.join();
-    }
+        println!("Joined a thread");
+    }*/
 }
 
 
@@ -517,31 +519,48 @@ impl BaseClientServer {
                       stop_rx: Receiver<()>,
                       host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
                       conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
-        let listener_thread = thread::spawn(move || {
-            let listener = TcpListener::bind("0.0.0.0:4730").unwrap();
-            for stream in listener.incoming() {
-                let conn_tx = conn_tx.clone();
-                let bcs = bcs.clone();
-                let in_thread = thread::scoped(move || {
-                    let stream = stream.unwrap();
-                    let peer_addr = stream.peer_addr().unwrap();
-                    let host = format!("{}", peer_addr.ip());
-                    let bcs = &mut bcs.write().unwrap();
-                    let nodeinfo = NodeInfo{ host: host.clone(), port: peer_addr.port() };
-                    let conn = Arc::new(Mutex::new(Box::new(Connection::new_incoming(&host[..], peer_addr.port(), stream))));
-                    bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
-                    // no need for filling active_ring it's not used in servers
-                    let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
-                    let mut available = lock.lock().unwrap();
-                    *available = true;
-                    cvar.notify_all();
-                    conn_tx.send(conn.clone());
-                });
-            }
-        });
+        let binds = bcs.read().unwrap().binds.clone();
+        let binds = match binds {
+            None => panic!("No binds for server!"),
+            Some(binds) => binds,
+        };
+        let binds = binds.clone();
+        let binds = binds.lock().unwrap();
+        let binds = binds.clone();
+        for bind in binds.iter() {
+            println!("Binding to {}", bind);
+            let bind = bind.clone();
+            let conn_tx = conn_tx.clone();
+            let bcs = bcs.clone();
+            let listener_thread = thread::spawn(move || {
+                let listener = TcpListener::bind(bind).unwrap();
+                println!("Bound to {}", bind);
+                for stream in listener.incoming() {
+                    let conn_tx = conn_tx.clone();
+                    let bcs = bcs.clone();
+                    let in_thread = thread::scoped(move || {
+                        let stream = stream.unwrap();
+                        let peer_addr = stream.peer_addr().unwrap();
+                        let host = format!("{}", peer_addr.ip());
+                        let bcs = &mut bcs.write().unwrap();
+                        let nodeinfo = NodeInfo{ host: host.clone(), port: peer_addr.port() };
+                        let conn = Arc::new(Mutex::new(Box::new(Connection::new_incoming(&host[..], peer_addr.port(), stream))));
+                        bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
+                        // no need for filling active_ring it's not used in servers
+                        let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
+                        let mut available = lock.lock().unwrap();
+                        *available = true;
+                        cvar.notify_all();
+                        conn_tx.send(conn.clone());
+                    });
+                }
+            });
+        }
         // No joining, just accept the explosion because TcpListener has no
         // real way to be interrupted.
+        println!("Waiting for stop");
         let _ = stop_rx.recv().unwrap();
+        println!("Got stop");
     }
 
     fn add_server(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
