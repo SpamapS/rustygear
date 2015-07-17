@@ -547,6 +547,7 @@ impl BaseClientServer {
             let host = host_rx.recv().unwrap();
             let host = host.lock().unwrap();
             let nodeinfo = NodeInfo { host: host.0.clone(), port: host.1 };
+            info!("{} disconnected", nodeinfo);
             let mut delete = false;
             match bcs.read().unwrap().active_connections.get(&nodeinfo) {
                 Some(conn) => {
