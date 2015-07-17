@@ -11,7 +11,7 @@ use std::cmp::Ordering;
 use std::io::Write;
 use std::io::Read;
 use std::io;
-use std::net::{TcpStream, TcpListener};
+use std::net::{TcpStream, TcpListener, SocketAddr, SocketAddrV4, IpAddr, Ipv4Addr};
 use std::collections::HashMap;
 use std::thread;
 use std::thread::{JoinHandle, sleep_ms};
@@ -95,13 +95,16 @@ fn bcs_constructor() {
 
 #[test]
 fn bcs_run_server() {
-    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec!["127.0.0.1:0"]));
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0 , 1), 0));
+    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
     println!("Waiting 100ms for server");
     thread::sleep_ms(100);
     {
         let mut bcs = bcs.read().unwrap();
+        println!("Stopping bcs...");
         bcs.stop();
     }
+    println!("Joining threads...");
     for thread in threads {
         thread.join();
     }
@@ -328,7 +331,7 @@ struct BaseClientServer {
     stop_pm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
     host_tx: Option<Arc<Mutex<Box<Sender<Arc<Mutex<Box<(String, u16)>>>>>>>>,
     handler: Option<Arc<Mutex<Box<HandlePacket + Send>>>>,
-    binds: Option<Arc<Mutex<Box<Vec<ToSocketAddrs>>>>>,
+    binds: Option<Arc<Mutex<Box<Vec<SocketAddr>>>>>,
 }
 
 impl BaseClientServer {
@@ -349,7 +352,7 @@ impl BaseClientServer {
     }
 
     /// Runs the client or server threads associated with this BCS
-    fn run(client_id: Vec<u8>, binds: Option<Vec<ToSocketAddrs>>) -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>) {
+    fn run(client_id: Vec<u8>, binds: Option<Vec<SocketAddr>>) -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>) {
         let mut bcs = Box::new(BaseClientServer::new(client_id));
         let (host_tx, host_rx): (Sender<Arc<Mutex<Box<(String, u16)>>>>, Receiver<Arc<Mutex<Box<(String, u16)>>>>) = channel();
         let (conn_tx, conn_rx) = channel();
@@ -366,20 +369,28 @@ impl BaseClientServer {
         let mut threads = Vec::new();
         {
             match binds {
-            Some(binds) => {
-                *bcs0.read().unwrap().binds.lock().unwrap() = binds;
-                threads.push(thread::spawn(move || {
-                    BaseClientServer::listen_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
-                }));
-            } else {
-                threads.push(thread::spawn(move || {
-                    BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
-                }));
-            }
+                Some(binds) => {
+                    let listen_binds = bcs0.read().unwrap().binds.clone();
+                    match listen_binds {
+                        Some(_) => unreachable!(),
+                        None => {
+                            bcs0.write().unwrap().binds = Some(Arc::new(Mutex::new(Box::new(binds))))
+                        },
+                    }
+                    threads.push(thread::spawn(move || {
+                        BaseClientServer::listen_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                    }));
+                },
+                None => {
+                    threads.push(thread::spawn(move || {
+                        BaseClientServer::connection_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                    }));
+                }
+            };
             threads.push(thread::spawn(move || {
                 BaseClientServer::polling_manager(bcs1, stop_pm_rx, host_tx, conn_rx);
             }));
-        };
+        }
         (bcs, threads)
     }
 
