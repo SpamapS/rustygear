@@ -164,9 +164,9 @@ struct NodeInfo {
     port: u16,
 }
 
-impl ToString for NodeInfo {
-    fn to_string(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+impl fmt::Display for NodeInfo {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.write_fmt(format_args!("{}:{}", self.host, self.port))
     }
 }
 
@@ -387,6 +387,7 @@ impl BaseClientServer {
         let mut bcs: Arc<RwLock<Box<BaseClientServer>>> = Arc::new(RwLock::new(bcs));
         let bcs0 = bcs.clone();
         let bcs1 = bcs.clone();
+        let bcs2 = bcs.clone();
         let conn_tx = conn_tx.clone();
         let host_tx = host_tx.clone();
         let mut threads = Vec::new();
@@ -401,7 +402,10 @@ impl BaseClientServer {
                         },
                     }
                     threads.push(thread::spawn(move || {
-                        BaseClientServer::listen_manager(bcs0, stop_cm_rx, host_rx, conn_tx);
+                        BaseClientServer::listen_manager(bcs0, stop_cm_rx, conn_tx);
+                    }));
+                    threads.push(thread::spawn(move || {
+                        BaseClientServer::disconnect_manager(bcs2, host_rx);
                     }));
                 },
                 None => {
@@ -535,10 +539,34 @@ impl BaseClientServer {
         // scoped threads should join here
     }
 
+    /// Hosts that have been disconnected go through here for cleanup
+    fn disconnect_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
+                          host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>)
+    {
+        loop {
+            let host = host_rx.recv().unwrap();
+            let host = host.lock().unwrap();
+            let nodeinfo = NodeInfo { host: host.0.clone(), port: host.1 };
+            let mut delete = false;
+            match bcs.read().unwrap().active_connections.get(&nodeinfo) {
+                Some(conn) => {
+                    conn.lock().unwrap().disconnect();
+                    /* TODO Handler for reassigning jobs will need to go here */
+                    delete = true;
+                },
+                None => {
+                    warn!("Disconnected host {} not found in active connections", nodeinfo);
+                },
+            }
+            if delete {
+                bcs.write().unwrap().active_connections.remove(&nodeinfo);
+            }
+        }
+    }
+
     /// Listens for new connections. Server complement to connection_manager
     fn listen_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                       stop_rx: Receiver<()>,
-                      host_rx: Receiver<Arc<Mutex<Box<(String, u16)>>>>,
                       conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
         let binds = bcs.read().unwrap().binds.clone();
         let binds = match binds {
