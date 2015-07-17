@@ -610,7 +610,7 @@ impl BaseClientServer {
                                     bcs.read().unwrap().handle_packet(p);
                                 }
                                 Err(_) => {
-                                    /* Log failure */
+                                    warn!("{} failed to read packet", *conn);
                                     host_tx.send(Arc::new(Mutex::new(Box::new((conn.host.clone(), conn.port)))));
                                     break;
                                 }
