@@ -5,6 +5,8 @@ extern crate time;
 extern crate byteorder;
 extern crate uuid;
 extern crate hash_ring;
+#[macro_use]
+extern crate log;
 
 use std::option::Option;
 use std::cmp::Ordering;
@@ -18,6 +20,7 @@ use std::thread::{JoinHandle, sleep_ms};
 use std::sync::{Mutex, RwLock, Condvar, Arc};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Receiver, Sender, RecvError};
+use std::fmt;
 
 use byteorder::{BigEndian, WriteBytesExt};
 use byteorder::ReadBytesExt;
@@ -183,6 +186,22 @@ struct Packet {
     data: Box<[u8]>,
 }
 
+impl fmt::Display for Connection {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let connected = match self.conn {
+            None => "disconnected",
+            Some(_) => "connected",
+        };
+        let state = match self.state {
+            ConnectionState::INIT => "Initializing",
+            ConnectionState::CONNECTED => "Connected",
+        };
+        fmt.write_fmt(format_args!("{}:{} ({}/{})", self.host, self.port, connected, state))
+    }
+}
+
+
+
 impl Connection {
     fn new(host: &str, port: u16) -> Connection {
         let mut c = Connection {
@@ -222,7 +241,7 @@ impl Connection {
                 self.conn = Some(try!(TcpStream::connect((&self.host as &str, self.port))));
                 self.connect_time = Some(time::now_utc());
             },
-            Some(_) => { /* log debug "already connected" */ },
+            Some(_) => { info!("Trying to connect to already connected {}", self); },
         }
         return Ok(());
     }
@@ -230,7 +249,9 @@ impl Connection {
     fn disconnect(&mut self) {
         match self.conn {
             Some(_) => self.conn = None,
-            None => { /* log debug "already disconnected" */ },
+            None => {
+                warn!("Disconnect called on already disconnected connection {}", &self);
+            },
         }
     }
 
@@ -452,8 +473,8 @@ impl BaseClientServer {
                                     loop {
                                         match real_conn.reconnect() {
                                             Ok(_) => break,
-                                            Err(_) => {
-                                                /* log warning about reconnecting */
+                                            Err(err) => {
+                                                info!("Connection to {} failed with ({}). Retry in 1s", *real_conn, err);
                                                 thread::sleep_ms(1000);
                                             },
                                         }
@@ -469,8 +490,8 @@ impl BaseClientServer {
                                         loop {
                                             match real_conn.connect() {
                                                 Ok(_) => break,
-                                                Err(_) => {
-                                                    /* log warning */
+                                                Err(err) => {
+                                                    info!("Connection to {} failed with ({}). Retry in 1s", *real_conn, err);
                                                     thread::sleep_ms(1000);
                                                 }
                                             }
@@ -528,13 +549,13 @@ impl BaseClientServer {
         let binds = binds.lock().unwrap();
         let binds = binds.clone();
         for bind in binds.iter() {
-            println!("Binding to {}", bind);
+            info!("Binding to {}", bind);
             let bind = bind.clone();
             let conn_tx = conn_tx.clone();
             let bcs = bcs.clone();
             let listener_thread = thread::spawn(move || {
                 let listener = TcpListener::bind(bind).unwrap();
-                println!("Bound to {}", bind);
+                info!("Bound to {}", bind);
                 for stream in listener.incoming() {
                     let conn_tx = conn_tx.clone();
                     let bcs = bcs.clone();
@@ -558,9 +579,9 @@ impl BaseClientServer {
         }
         // No joining, just accept the explosion because TcpListener has no
         // real way to be interrupted.
-        println!("Waiting for stop");
+        info!("Waiting for stop");
         let _ = stop_rx.recv().unwrap();
-        println!("Got stop");
+        info!("Got stop");
     }
 
     fn add_server(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
