@@ -13,7 +13,8 @@ use std::cmp::Ordering;
 use std::io::Write;
 use std::io::Read;
 use std::io;
-use std::net::{TcpStream, TcpListener, SocketAddr, SocketAddrV4, IpAddr, Ipv4Addr};
+use std::net::TcpStream;
+use std::net::{TcpListener, SocketAddr, SocketAddrV4, SocketAddrV6, IpAddr, Ipv4Addr};
 use std::collections::HashMap;
 use std::thread;
 use std::thread::{JoinHandle, sleep_ms};
@@ -103,6 +104,18 @@ fn bcs_run_server() {
     println!("Waiting 100ms for server");
     thread::sleep_ms(100);
     {
+        let bcs2 = bcs.clone();
+        let bcs2 = bcs2.read().unwrap();
+        let binds = bcs2.binds.clone();
+        println!("Checking binds for actual port");
+        let port: u16;
+        match binds {
+            None => unreachable!(),
+            Some(binds) => {
+                port = binds.lock().unwrap()[0].port();
+                println!("First bind port is {}", port);
+            }
+        }
         let mut bcs = bcs.read().unwrap();
         println!("Stopping bcs...");
         bcs.stop();
@@ -569,14 +582,19 @@ impl BaseClientServer {
     fn listen_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
                       stop_rx: Receiver<()>,
                       conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
+        // This block here is intended to just copy the vector. Seems like maybe
+        // this should be turned into a parameter for simplicity sake.
         let binds = bcs.read().unwrap().binds.clone();
         let binds = match binds {
             None => panic!("No binds for server!"),
             Some(binds) => binds,
         };
-        let binds = binds.clone();
-        let binds = binds.lock().unwrap();
-        let binds = binds.clone();
+        let real_binds = binds.clone();
+        let binds: Vec<SocketAddr>;
+        {
+            binds = *real_binds.lock().unwrap().clone();
+        }
+        let mut offset = 0;
         for bind in binds.iter() {
             info!("Binding to {}", bind);
             let bind = bind.clone();
@@ -584,6 +602,27 @@ impl BaseClientServer {
             let bcs = bcs.clone();
             let listener_thread = thread::spawn(move || {
                 let listener = TcpListener::bind(bind).unwrap();
+                let assignedport = listener.local_addr().unwrap().port();
+                if bind.port() == 0 {
+                    let bcs = bcs.clone();
+                    let bcs = bcs.read().unwrap();
+                    debug!("port == 0, reading assigned from socket");
+                    let binds = bcs.binds.clone();
+                    let binds = match binds {
+                        None => panic!("Somehow got no binds despite being in binds for loop."),
+                        Some(binds) => binds,
+                    };
+                    binds.lock().unwrap()[offset] = match bind {
+                        SocketAddr::V4(bind) => {
+                            SocketAddr::V4(SocketAddrV4::new(bind.ip().clone(), assignedport))
+                        },
+                        SocketAddr::V6(bind) => {
+                            SocketAddr::V6(SocketAddrV6::new(bind.ip().clone(), assignedport, bind.flowinfo(), bind.scope_id()))
+                        },
+                    };
+                } else {
+                    debug!("port != 0 but == {}", bind.port());
+                }
                 info!("Bound to {}", bind);
                 for stream in listener.incoming() {
                     let conn_tx = conn_tx.clone();
@@ -605,6 +644,7 @@ impl BaseClientServer {
                     });
                 }
             });
+            offset += 1;
         }
         // No joining, just accept the explosion because TcpListener has no
         // real way to be interrupted.
