@@ -7,6 +7,7 @@ extern crate uuid;
 extern crate hash_ring;
 #[macro_use]
 extern crate log;
+extern crate env_logger;
 
 use std::option::Option;
 use std::cmp::Ordering;
@@ -18,7 +19,7 @@ use std::net::{TcpListener, SocketAddr, SocketAddrV4, SocketAddrV6, IpAddr, Ipv4
 use std::collections::HashMap;
 use std::thread;
 use std::thread::{JoinHandle, sleep_ms};
-use std::sync::{Mutex, RwLock, Condvar, Arc};
+use std::sync::{Mutex, MutexGuard, Condvar, Arc};
 use std::sync::mpsc::channel;
 use std::sync::mpsc::{Receiver, Sender, RecvError};
 use std::fmt;
@@ -31,6 +32,8 @@ use hash_ring::HashRing;
 
 pub mod constants;
 use constants::*;
+pub mod util;
+use util::LoggingRwLock as RwLock;
 
 #[test]
 fn constructor() {
@@ -99,24 +102,50 @@ fn bcs_constructor() {
 
 #[test]
 fn bcs_run_server() {
+    env_logger::init().unwrap();
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0 , 1), 0));
     let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
     println!("Waiting 100ms for server");
     thread::sleep_ms(100);
     {
-        let bcs2 = bcs.clone();
-        let bcs2 = bcs2.read().unwrap();
-        let binds = bcs2.binds.clone();
+        let binds;
+        {
+            let bcs2 = bcs.clone();
+            let bcs2 = bcs2.read(line!()).unwrap();
+            binds = bcs2.binds.clone();
+        }
         println!("Checking binds for actual port");
-        let port: u16;
+        let mut port: u16;
         match binds {
             None => unreachable!(),
             Some(binds) => {
-                port = binds.lock().unwrap()[0].port();
-                println!("First bind port is {}", port);
+                loop {
+                    port = binds.lock().unwrap()[0].port();
+                    if port != 0 {
+                        println!("First bind port is {}", port);
+                        break;
+                    }
+                    // condvar or channel is probably a better idea
+                    thread::sleep_ms(100);
+                }
             }
         }
-        let mut bcs = bcs.read().unwrap();
+        // Is it working?
+        let (mut bcs_client, client_threads) = BaseClientServer::run("servers_client".to_string().into_bytes(), None);
+        {
+            let bcs_client = bcs_client.write(line!()).unwrap();
+            bcs_client.add_server("127.0.0.1".to_string(), port);
+        }
+        {
+            //let bcs_client = bcs_client.read(line!()).unwrap();
+            BaseClientServer::wait_for_connection(bcs_client.clone(), Some(5000)).unwrap();
+        }
+        {
+            let bcs_client = bcs_client.write(line!()).unwrap();
+            bcs_client.stop();
+        }
+        // Now shut server down
+        let mut bcs = bcs.read(line!()).unwrap();
         println!("Stopping bcs...");
         bcs.stop();
     }
@@ -133,9 +162,9 @@ fn bcs_run_server() {
 #[should_panic]
 fn bcs_select_connection() {
     let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes(), None);
-    let mut bcs = bcs.write().unwrap();
     println!("Waiting 100ms for connections");
-    bcs.wait_for_connection(Some(100)).unwrap();
+    BaseClientServer::wait_for_connection(bcs.clone(), Some(100)).unwrap();
+    let mut bcs = bcs.write(line!()).unwrap();
     bcs.select_connection("some string".to_string());
     bcs.stop();
     for thread in threads {
@@ -153,7 +182,7 @@ fn bcs_run() {
     println!("Waiting 100ms");
     thread::sleep_ms(100);
     {
-        let bcs = &bcs.read().unwrap();
+        let bcs = &bcs.read(line!()).unwrap();
         bcs.stop();
     }
     for thread in threads {
@@ -251,11 +280,13 @@ impl Connection {
     fn connect(&mut self) -> io::Result<()> {
         match self.conn {
             None => {
+                debug!("about to try connecting to {}:{}", self.host, self.port);
                 self.conn = Some(try!(TcpStream::connect((&self.host as &str, self.port))));
                 self.connect_time = Some(time::now_utc());
             },
             Some(_) => { info!("Trying to connect to already connected {}", self); },
         }
+        debug!("connected to {}:{}!", self.host, self.port);
         return Ok(());
     }
 
@@ -360,7 +391,7 @@ trait HandlePacket: Send {
 struct BaseClientServer {
     client_id: Vec<u8>,
     active_connections: HashMap<NodeInfo, Arc<Mutex<Box<Connection>>>>,
-    active_connections_cond: Arc<(Mutex<bool>, Condvar)>,
+    active_connections_cond: Arc<Box<(Mutex<bool>, Condvar)>>,
     active_ring: HashRing<NodeInfo>,
     hosts: Vec<String>,
     stop_cm_tx: Option<Arc<Mutex<Box<Sender<()>>>>>,
@@ -376,7 +407,7 @@ impl BaseClientServer {
         BaseClientServer {
             client_id: client_id,
             active_connections: HashMap::new(),
-            active_connections_cond: Arc::new((Mutex::new(false), Condvar::new())),
+            active_connections_cond: Arc::new(Box::new((Mutex::new(false), Condvar::new()))),
             active_ring: HashRing::new(Vec::new(), 1),
             hosts: Vec::new(),
             stop_cm_tx: None,
@@ -407,11 +438,11 @@ impl BaseClientServer {
         {
             match binds {
                 Some(binds) => {
-                    let listen_binds = bcs0.read().unwrap().binds.clone();
+                    let listen_binds = bcs0.read(line!()).unwrap().binds.clone();
                     match listen_binds {
                         Some(_) => unreachable!(),
                         None => {
-                            bcs0.write().unwrap().binds = Some(Arc::new(Mutex::new(Box::new(binds))))
+                            bcs0.write(line!()).unwrap().binds = Some(Arc::new(Mutex::new(Box::new(binds))))
                         },
                     }
                     threads.push(thread::spawn(move || {
@@ -476,14 +507,26 @@ impl BaseClientServer {
                         host = hostport.0.clone();
                         port = hostport.1;
                     }
+                    debug!("received {}:{}", host, port);
                     let conn_tx = conn_tx.clone();
                     let new_tx = new_tx.clone();
                     {
                         let nodeinfo = NodeInfo { host: host.clone(), port: port };
-                        match bcs.read().unwrap().active_connections.get(&nodeinfo) {
+                        debug!("searching for {}:{}", host, port);
+                        let found = {
+                            let bcs = bcs.read(line!()).unwrap();
+                            match bcs.active_connections.get(&nodeinfo) {
+                                Some(conn) => Some(conn.clone()),
+                                None => None,
+                            }
+                        };
+                        match found {
                             Some(conn) => {
+                                debug!("found {}:{}", host, port);
                                 // stop sending things to it
-                                bcs.write().unwrap().active_ring.remove_node(&NodeInfo{host: host.clone(), port: port});
+                                {
+                                    bcs.write(line!()).unwrap().active_ring.remove_node(&NodeInfo{host: host.clone(), port: port});
+                                }
                                 let conn = conn.clone();
                                 reconn_thread = thread::scoped(move || {
                                     let mut real_conn = conn.lock().unwrap();
@@ -500,11 +543,13 @@ impl BaseClientServer {
                                 });
                             },
                             None => {
+                                debug!("NEW {}:{}", host, port);
                                 conn_thread = thread::scoped(move || {
                                     let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                                     {
                                         let mut real_conn = conn.lock().unwrap();
                                         loop {
+                                            debug!("trying to connect {}", *real_conn);
                                             match real_conn.connect() {
                                                 Ok(_) => break,
                                                 Err(err) => {
@@ -514,6 +559,7 @@ impl BaseClientServer {
                                             }
                                         };
                                     }
+                                    debug!("sending {}", *conn.lock().unwrap());
                                     new_tx.send(conn.clone());
                                 });
                             }
@@ -525,16 +571,19 @@ impl BaseClientServer {
                         Ok(conn) => conn,
                         Err(_) => panic!("Could not receive in connection manager"),
                     };
+                    debug!("received {}", *conn.lock().unwrap());
                     {
                         let ref real_conn = **conn.lock().unwrap();
                         let host = real_conn.host.clone();
                         {
-                            let bcs = &mut bcs.write().unwrap();
+                            debug!("locking bcs");
+                            let bcs = &mut bcs.write(line!()).unwrap();
+                            debug!("locked bcs");
                             let host = host.clone();
                             let nodeinfo = NodeInfo{ host: host, port: real_conn.port };
                             bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
                             bcs.active_ring.add_node(&nodeinfo);
-                            let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
+                            let &(ref lock, ref cvar) = &**bcs.active_connections_cond;
                             let mut available = lock.lock().unwrap();
                             *available = true;
                             cvar.notify_all();
@@ -545,7 +594,7 @@ impl BaseClientServer {
                 _ = stop_rx.recv() => { break }
             )
         }
-        for (_, conn) in bcs.read().unwrap().active_connections.iter() {
+        for (_, conn) in bcs.read(line!()).unwrap().active_connections.iter() {
             let mut conn = conn.lock().unwrap();
             conn.disconnect();
         }
@@ -562,7 +611,7 @@ impl BaseClientServer {
             let nodeinfo = NodeInfo { host: host.0.clone(), port: host.1 };
             info!("{} disconnected", nodeinfo);
             let mut delete = false;
-            match bcs.read().unwrap().active_connections.get(&nodeinfo) {
+            match bcs.read(line!()).unwrap().active_connections.get(&nodeinfo) {
                 Some(conn) => {
                     conn.lock().unwrap().disconnect();
                     /* TODO Handler for reassigning jobs will need to go here */
@@ -573,7 +622,7 @@ impl BaseClientServer {
                 },
             }
             if delete {
-                bcs.write().unwrap().active_connections.remove(&nodeinfo);
+                bcs.write(line!()).unwrap().active_connections.remove(&nodeinfo);
             }
         }
     }
@@ -584,7 +633,7 @@ impl BaseClientServer {
                       conn_tx: Sender<Arc<Mutex<Box<Connection>>>>) {
         // This block here is intended to just copy the vector. Seems like maybe
         // this should be turned into a parameter for simplicity sake.
-        let binds = bcs.read().unwrap().binds.clone();
+        let binds = bcs.read(line!()).unwrap().binds.clone();
         let binds = match binds {
             None => panic!("No binds for server!"),
             Some(binds) => binds,
@@ -605,7 +654,7 @@ impl BaseClientServer {
                 let assignedport = listener.local_addr().unwrap().port();
                 if bind.port() == 0 {
                     let bcs = bcs.clone();
-                    let bcs = bcs.read().unwrap();
+                    let bcs = bcs.read(line!()).unwrap();
                     debug!("port == 0, reading assigned from socket");
                     let binds = bcs.binds.clone();
                     let binds = match binds {
@@ -625,18 +674,22 @@ impl BaseClientServer {
                 }
                 info!("Bound to {}", bind);
                 for stream in listener.incoming() {
+                    debug!("incoming connection!");
                     let conn_tx = conn_tx.clone();
                     let bcs = bcs.clone();
                     let in_thread = thread::scoped(move || {
                         let stream = stream.unwrap();
                         let peer_addr = stream.peer_addr().unwrap();
                         let host = format!("{}", peer_addr.ip());
-                        let bcs = &mut bcs.write().unwrap();
                         let nodeinfo = NodeInfo{ host: host.clone(), port: peer_addr.port() };
                         let conn = Arc::new(Mutex::new(Box::new(Connection::new_incoming(&host[..], peer_addr.port(), stream))));
-                        bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
+                        {
+                            let bcs = &mut bcs.write(line!()).unwrap();
+                            bcs.active_connections.insert(nodeinfo.clone(), conn.clone());
+                        }
+                        let bcs = bcs.read(line!()).unwrap();
                         // no need for filling active_ring it's not used in servers
-                        let &(ref lock, ref cvar) = &*bcs.active_connections_cond;
+                        let &(ref lock, ref cvar) = &**bcs.active_connections_cond;
                         let mut available = lock.lock().unwrap();
                         *available = true;
                         cvar.notify_all();
@@ -653,8 +706,15 @@ impl BaseClientServer {
         info!("Got stop");
     }
 
-    fn add_server(&self, host: String, port: u16, host_tx: Sender<Arc<Mutex<Box<(String, u16)>>>>) {
-        host_tx.send(Arc::new(Mutex::new(Box::new((host, port)))));
+    fn add_server(&self, host: String, port: u16) {
+        let host_tx = self.host_tx.clone();
+        match host_tx {
+            None => panic!("adding server to broken BaseClientServer object."),
+            Some(host_tx) => {
+                println!("Sending {}:{}", host, port);
+                host_tx.lock().unwrap().send(Arc::new(Mutex::new(Box::new((host, port)))));
+            },
+        }
     }
 
     fn polling_manager(bcs: Arc<RwLock<Box<BaseClientServer>>>,
@@ -676,7 +736,7 @@ impl BaseClientServer {
                             let mut conn = conn.lock().unwrap();
                             match conn.read_packet() {
                                 Ok(p) => {
-                                    bcs.read().unwrap().handle_packet(p);
+                                    bcs.read(line!()).unwrap().handle_packet(p);
                                 }
                                 Err(_) => {
                                     warn!("{} failed to read packet", *conn);
@@ -706,15 +766,30 @@ impl BaseClientServer {
         }
     }
 
-    fn wait_for_connection(&self, timeout: Option<u32>) -> Result<bool, &'static str> {
-        // will wait until there are perceived active connections
-        let &(ref lock, ref cvar) = &*self.active_connections_cond;
-        let mut available = lock.lock().unwrap();
-        while !*available {
+    fn wait_for_connection(bcs: Arc<RwLock<Box<BaseClientServer>>>, timeout: Option<u32>) -> Result<bool, &'static str> {
+        // It's very early and I don't want to forget. We can't wait on a condition variable inside
+        // a locked structure as the lock will block the notifiers. We likely need to pull the
+        // condition variable out into its own piece and pass it to both threads.
+        loop {
+            //let mut available: MutexGuard<bool>;
+            let mut active_connections_cond: Arc<Box<(Mutex<bool>, Condvar)>>;
+            {
+                let bcs = bcs.read(line!()).unwrap();
+                active_connections_cond = bcs.active_connections_cond.clone();
+            }
+        //let ref lock: Mutex<bool>;
+        //let ref cvar: Condvar;
+            let lock = &active_connections_cond.clone().0;
+            let cvar = &active_connections_cond.clone().1;
+            let mut available = lock.lock().unwrap();
+            // will wait until there are perceived active connections
+            if *available {
+                break;
+            }
             match timeout {
                 Some(timeout) => {
                     let wait_result = cvar.wait_timeout_ms(available, timeout).unwrap();
-                    if wait_result.1 {
+                    if !wait_result.1 {
                         return Err("Timed out waiting for connections")
                     }
                     available = wait_result.0;
