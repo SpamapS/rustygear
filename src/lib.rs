@@ -85,16 +85,57 @@ fn packet_constructor() {
     assert!(p.data.len() == 1);
 }
 
+fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, u16) {
+    match env_logger::init() {
+        Ok(_) => { },
+        Err(e) => {
+            info!("{}", e);
+        }
+    }
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0 , 1), 0));
+    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
+    println!("Waiting 100ms for server");
+    let mut port: u16;
+    thread::sleep_ms(100);
+    {
+        let binds;
+        {
+            let bcs2 = bcs.clone();
+            let bcs2 = bcs2.read(line!()).unwrap();
+            binds = bcs2.binds.clone();
+        }
+        println!("Checking binds for actual port");
+        match binds {
+            None => unreachable!(),
+            Some(binds) => {
+                loop {
+                    port = binds.lock().unwrap()[0].port();
+                    if port != 0 {
+                        println!("First bind port is {}", port);
+                        break;
+                    }
+                    // condvar or channel is probably a better idea
+                    thread::sleep_ms(100);
+                }
+            }
+        }
+    }
+    (bcs, port)
+}
+
 #[test]
-#[should_panic]
 fn send_packet() {
-    let mut conn = Connection::new("localost", 4730);
+    let (bcs, port) = run_test_server();
+    let mut conn = Connection::new("127.0.0.1", port);
+    conn.connect().unwrap();
     let data: Box<[u8]> = Box::new([0x00u8]);
     let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
     match conn.send_packet(p) {
         Ok(_) => {},
         Err(_) => panic!("Error in send_packet."),
     }
+    let bcs = bcs.read(line!()).unwrap();
+    bcs.stop();
 }
 
 #[test]
@@ -116,62 +157,27 @@ fn bcs_constructor() {
 }
 
 #[test]
-fn bcs_run_server() {
-    env_logger::init().unwrap();
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0 , 1), 0));
-    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
-    println!("Waiting 100ms for server");
-    thread::sleep_ms(100);
+fn run_server_client_can_reach() {
+    let (bcs, port) = run_test_server();
+    // Is it working?
+    let (mut bcs_client, client_threads) = BaseClientServer::run("servers_client".to_string().into_bytes(), None);
     {
-        let binds;
-        {
-            let bcs2 = bcs.clone();
-            let bcs2 = bcs2.read(line!()).unwrap();
-            binds = bcs2.binds.clone();
-        }
-        println!("Checking binds for actual port");
-        let mut port: u16;
-        match binds {
-            None => unreachable!(),
-            Some(binds) => {
-                loop {
-                    port = binds.lock().unwrap()[0].port();
-                    if port != 0 {
-                        println!("First bind port is {}", port);
-                        break;
-                    }
-                    // condvar or channel is probably a better idea
-                    thread::sleep_ms(100);
-                }
-            }
-        }
-        // Is it working?
-        let (mut bcs_client, client_threads) = BaseClientServer::run("servers_client".to_string().into_bytes(), None);
-        {
-            let bcs_client = bcs_client.write(line!()).unwrap();
-            bcs_client.add_server("127.0.0.1".to_string(), port);
-        }
-        {
-            //let bcs_client = bcs_client.read(line!()).unwrap();
-            BaseClientServer::wait_for_connection(bcs_client.clone(), Some(5000)).unwrap();
-        }
-        {
-            let bcs_client = bcs_client.write(line!()).unwrap();
-            bcs_client.stop();
-        }
-        // Now shut server down
-        let mut bcs = bcs.read(line!()).unwrap();
-        println!("Stopping bcs...");
-        bcs.stop();
+        let bcs_client = bcs_client.write(line!()).unwrap();
+        bcs_client.add_server("127.0.0.1".to_string(), port);
     }
-    /* XXX this has problems because of uninterruptible TcpListener
-    println!("Joining {} threads...", threads.len());
-    for thread in threads {
-        thread.join();
-        println!("Joined a thread");
-    }*/
+    {
+        //let bcs_client = bcs_client.read(line!()).unwrap();
+        BaseClientServer::wait_for_connection(bcs_client.clone(), Some(5000)).unwrap();
+    }
+    {
+        let bcs_client = bcs_client.write(line!()).unwrap();
+        bcs_client.stop();
+    }
+    // Now shut server down
+    let mut bcs = bcs.read(line!()).unwrap();
+    println!("Stopping bcs...");
+    bcs.stop();
 }
-
 
 #[test]
 #[should_panic]
