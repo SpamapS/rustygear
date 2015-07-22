@@ -139,16 +139,20 @@ fn send_packet() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic]  // Still no echo implementation in server
 fn echo() {
+    let (bcs, port) = run_test_server();
     let mut test: Vec<u8> = Vec::new();
     test.extend("abc123".to_string().bytes());
-    let mut conn = Connection::new("localhost", 4730);
+    let mut conn = Connection::new("127.0.0.1", port);
+    conn.connect().unwrap();
     let result = String::from_utf8(conn.echo(test, 0)).unwrap();
     assert_eq!("abc123", result);
     let mut test2: Vec<u8> = Vec::new();
     let mut output = String::from_utf8(conn.echo(test2, 0)).unwrap();
     println!("UUID = {}", output);
+    let bcs = bcs.read(line!()).unwrap();
+    bcs.stop();
 }
 
 #[test]
