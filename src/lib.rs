@@ -1,3 +1,18 @@
+/*
+ * Copyright (c) 2015, Hewlett Packard Development Company L.P.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #![feature(mpsc_select)]
 #![feature(scoped)]
 #![feature(ip_addr)]
@@ -711,7 +726,7 @@ impl BaseClientServer {
         match host_tx {
             None => panic!("adding server to broken BaseClientServer object."),
             Some(host_tx) => {
-                println!("Sending {}:{}", host, port);
+                debug!("Sending {}:{}", host, port);
                 host_tx.lock().unwrap().send(Arc::new(Mutex::new(Box::new((host, port)))));
             },
         }
@@ -766,26 +781,25 @@ impl BaseClientServer {
         }
     }
 
+    /// Wait for connection condition from connection_manager.
+    ///
+    /// We need the rwlock, and not just an unlocked structure, so that we can
+    /// just peek at the structure to see the condition variable, and then let
+    /// other threads write lock.
     fn wait_for_connection(bcs: Arc<RwLock<Box<BaseClientServer>>>, timeout: Option<u32>) -> Result<bool, &'static str> {
-        // It's very early and I don't want to forget. We can't wait on a condition variable inside
-        // a locked structure as the lock will block the notifiers. We likely need to pull the
-        // condition variable out into its own piece and pass it to both threads.
         loop {
-            //let mut available: MutexGuard<bool>;
             let mut active_connections_cond: Arc<Box<(Mutex<bool>, Condvar)>>;
             {
                 let bcs = bcs.read(line!()).unwrap();
                 active_connections_cond = bcs.active_connections_cond.clone();
             }
-        //let ref lock: Mutex<bool>;
-        //let ref cvar: Condvar;
             let lock = &active_connections_cond.clone().0;
             let cvar = &active_connections_cond.clone().1;
             let mut available = lock.lock().unwrap();
-            // will wait until there are perceived active connections
             if *available {
                 break;
             }
+            // will wait until there are perceived active connections
             match timeout {
                 Some(timeout) => {
                     let wait_result = cvar.wait_timeout_ms(available, timeout).unwrap();
