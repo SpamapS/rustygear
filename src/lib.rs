@@ -45,6 +45,8 @@ use uuid::Uuid;
 
 use hash_ring::HashRing;
 
+pub mod packet;
+use packet::Packet;
 pub mod constants;
 use constants::*;
 pub mod util;
@@ -74,15 +76,6 @@ fn change_state() {
 
     c.change_state(ConnectionState::INIT);
     assert!(c.state == ConnectionState::INIT);
-}
-
-#[test]
-fn packet_constructor() {
-    let data: Box<[u8]> = Box::new([0x00u8]);
-    let p = Packet::new(PacketCode::REQ, ECHO_REQ, data);
-    assert!(p.code == PacketCode::REQ);
-    assert!(p.ptype == ECHO_REQ);
-    assert!(p.data.len() == 1);
 }
 
 fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, u16) {
@@ -245,12 +238,6 @@ struct Connection {
     state: ConnectionState,
     state_time: Option<time::Tm>,
     echo_conditions: HashMap<Vec<u8>, Arc<(Mutex<bool>, Condvar)>>,
-}
-
-struct Packet {
-    code: PacketCode,
-    ptype: u32,
-    data: Box<[u8]>,
 }
 
 impl fmt::Display for Connection {
@@ -835,24 +822,4 @@ impl BaseClientServer {
         }
     }
 
-}
-
-
-impl PartialEq for Packet {
-    fn eq(&self, other: &Packet) -> bool {
-        self.code == other.code &&
-        self.ptype == other.ptype &&
-        self.data == other.data
-    }
-}
-
-
-impl Packet {
-    fn new(code: PacketCode, ptype: u32, data: Box<[u8]>) -> Packet {
-        Packet {
-            code: code,
-            ptype: ptype,
-            data: data,
-        }
-    }
 }
