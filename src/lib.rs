@@ -23,13 +23,10 @@ extern crate uuid;
 extern crate log;
 extern crate env_logger;
 
-use std::option::Option;
-use std::io;
 use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
 use std::sync::Arc;
 use std::thread;
-
-use hash_ring::HashRing;
+use std::thread::JoinHandle;
 
 pub mod packet;
 use packet::Packet;
@@ -42,7 +39,7 @@ use base::BaseClientServer;
 pub mod util;
 use util::LoggingRwLock as RwLock;
 
-fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, u16) {
+fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, Vec<JoinHandle<()>>, u16) {
     match env_logger::init() {
         Ok(_) => { },
         Err(e) => {
@@ -50,7 +47,7 @@ fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, u16) {
         }
     }
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0 , 1), 0));
-    let (mut bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
+    let (bcs, threads) = BaseClientServer::run("runserver".to_string().into_bytes(), Some(vec![addr]));
     println!("Waiting 100ms for server");
     let mut port: u16;
     thread::sleep_ms(100);
@@ -77,12 +74,12 @@ fn run_test_server() -> (Arc<RwLock<Box<BaseClientServer>>>, u16) {
             }
         }
     }
-    (bcs, port)
+    (bcs, threads, port)
 }
 
 #[test]
 fn send_packet() {
-    let (bcs, port) = run_test_server();
+    let (bcs, _, port) = run_test_server();
     let mut conn = Connection::new("127.0.0.1", port);
     conn.connect().unwrap();
     let data: Box<[u8]> = Box::new([0x00u8]);
@@ -98,15 +95,15 @@ fn send_packet() {
 #[test]
 #[should_panic]  // Still no echo implementation in server
 fn echo() {
-    let (bcs, port) = run_test_server();
+    let (bcs, _, port) = run_test_server();
     let mut test: Vec<u8> = Vec::new();
     test.extend("abc123".to_string().bytes());
     let mut conn = Connection::new("127.0.0.1", port);
     conn.connect().unwrap();
     let result = String::from_utf8(conn.echo(test, 0)).unwrap();
     assert_eq!("abc123", result);
-    let mut test2: Vec<u8> = Vec::new();
-    let mut output = String::from_utf8(conn.echo(test2, 0)).unwrap();
+    let test2: Vec<u8> = Vec::new();
+    let output = String::from_utf8(conn.echo(test2, 0)).unwrap();
     println!("UUID = {}", output);
     let bcs = bcs.read(line!()).unwrap();
     bcs.stop();
@@ -119,9 +116,9 @@ fn bcs_constructor() {
 
 #[test]
 fn run_server_client_can_reach() {
-    let (bcs, port) = run_test_server();
+    let (bcs, _, port) = run_test_server();
     // Is it working?
-    let (mut bcs_client, client_threads) = BaseClientServer::run("servers_client".to_string().into_bytes(), None);
+    let (bcs_client, _) = BaseClientServer::run("servers_client".to_string().into_bytes(), None);
     {
         let bcs_client = bcs_client.write(line!()).unwrap();
         bcs_client.add_server("127.0.0.1".to_string(), port);
@@ -135,7 +132,7 @@ fn run_server_client_can_reach() {
         bcs_client.stop();
     }
     // Now shut server down
-    let mut bcs = bcs.read(line!()).unwrap();
+    let bcs = bcs.read(line!()).unwrap();
     println!("Stopping bcs...");
     bcs.stop();
 }
@@ -143,7 +140,7 @@ fn run_server_client_can_reach() {
 #[test]
 #[should_panic]
 fn bcs_select_connection() {
-    let (mut bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes(), None);
+    let (bcs, threads) = BaseClientServer::run("selconn".to_string().into_bytes(), None);
     println!("Waiting 100ms for connections");
     BaseClientServer::wait_for_connection(bcs.clone(), Some(100)).unwrap();
     let mut bcs = bcs.write(line!()).unwrap();
@@ -157,10 +154,7 @@ fn bcs_select_connection() {
 #[test]
 fn bcs_run() {
     println!("Begin");
-    let (mut bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes(), None);
-    println!("Started");
-    let mut bcs0 = bcs.clone();
-    let mut bcs1 = bcs.clone();
+    let (bcs, threads) = BaseClientServer::run("clientid".to_string().into_bytes(), None);
     println!("Waiting 100ms");
     thread::sleep_ms(100);
     {
