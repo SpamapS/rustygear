@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #![feature(mpsc_select)]
-#![feature(scoped)]
 #![feature(ip_addr)]
 extern crate byteorder;
 extern crate hash_ring;

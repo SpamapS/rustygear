@@ -186,7 +186,7 @@ impl BaseClientServer {
                                     bcs.write(line!()).unwrap().active_ring.remove_node(&NodeInfo{host: host.clone(), port: port});
                                 }
                                 let conn = conn.clone();
-                                thread::scoped(move || {
+                                let child = thread::spawn(move || {
                                     let mut real_conn = conn.lock().unwrap();
                                     loop {
                                         match real_conn.reconnect() {
@@ -199,10 +199,11 @@ impl BaseClientServer {
                                     };
                                     conn_tx.send(conn.clone());
                                 });
+                                child.join();
                             },
                             None => {
                                 debug!("NEW {}:{}", host, port);
-                                thread::scoped(move || {
+                                let child = thread::spawn(move || {
                                     let conn: Arc<Mutex<Box<Connection>>> = Arc::new(Mutex::new(Box::new(Connection::new(&host, port)))).clone();
                                     {
                                         let mut real_conn = conn.lock().unwrap();
@@ -220,6 +221,7 @@ impl BaseClientServer {
                                     debug!("sending {}", *conn.lock().unwrap());
                                     new_tx.send(conn.clone());
                                 });
+                                child.join();
                             }
                         };
                     } // unlock bcs
@@ -256,7 +258,6 @@ impl BaseClientServer {
             let mut conn = conn.lock().unwrap();
             conn.disconnect();
         }
-        // scoped threads should join here
     }
 
     /// Hosts that have been disconnected go through here for cleanup
@@ -335,7 +336,7 @@ impl BaseClientServer {
                     debug!("incoming connection!");
                     let conn_tx = conn_tx.clone();
                     let bcs = bcs.clone();
-                    thread::scoped(move || {
+                    let child = thread::spawn(move || {
                         let stream = stream.unwrap();
                         let peer_addr = stream.peer_addr().unwrap();
                         let host = format!("{}", peer_addr.ip());
@@ -408,7 +409,6 @@ impl BaseClientServer {
                 _ = stop_rx.recv() => { break }
             );
         };
-        // scoped threads all joined here
         for thread in threads {
             thread.join();
         }
