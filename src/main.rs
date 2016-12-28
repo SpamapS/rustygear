@@ -2,10 +2,12 @@ extern crate mio;
 extern crate byteorder;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{Shutdown, SocketAddr};
 
 pub mod constants;
 use constants::*;
+pub mod packet;
+use packet::*;
 
 use self::byteorder::{ByteOrder, BigEndian};
 use self::mio::*;
@@ -13,6 +15,7 @@ use self::mio::tcp::*;
 
 struct GearmanRemote {
     socket: TcpStream,
+    packet: Packet,
 }
 
 struct GearmanServer {
@@ -23,42 +26,53 @@ struct GearmanServer {
 
 const SERVER_TOKEN: Token = Token(0);
 
-//const GEARMAN_REQ: [u8; 4] = [b'\0', b'R', b'E', b'Q'];
-//const GEARMAN_RES: [u8; 4] = [b'\0', b'R', b'E', b'S'];
-
 impl GearmanRemote {
-    fn read(&mut self) {
-        let mut magic = [0; 4];
+    fn new(socket: TcpStream) -> GearmanRemote {
+        GearmanRemote {
+            socket: socket,
+            packet: Packet::new(),
+        }
+    }
+
+    fn read(&mut self) -> bool {
+        let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
-        let ptype: u32;
+        let mut size_buf = [0; 4];
+        let mut psize: u32 = 0;
         loop {
             let mut tot_read = 0;
-            match self.socket.try_read(&mut magic) {
+            match self.socket.try_read(&mut magic_buf) {
                 Err(e) => {
                     println!("Error while reading socket: {:?}", e);
-                    return
+                    return false
                 },
-                Ok(None) =>
-                    // No more to read
-                    break,
+                Ok(None) => {
+                    println!("No more to read");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (magic)");
+                    return false
+                }
                 Ok(Some(len)) => {
                     tot_read += len;
                     if tot_read == 4 {
                         // Is this a req/res
-                        match magic {
+                        match magic_buf {
                             REQ => {
-                                break
+                                self.packet.magic = PacketMagic::REQ;
                             },
                             RES => {
-                                break
+                                self.packet.magic = PacketMagic::RES;
                             },
                             // Could be admin
                             _ => {
                                 println!("Possible admin protocol usage");
-                                return
+                                return true
                             },
                         }
-                    }
+                    };
+                    break
                 },
             }
         }
@@ -68,23 +82,83 @@ impl GearmanRemote {
             match self.socket.try_read(&mut typ_buf) {
                 Err(e) => {
                     println!("Error while reading socket: {:?}", e);
-                    return
+                    return false
                 },
-                Ok(None) =>
-                    // No more to read
-                    break,
+                Ok(None) => {
+                    println!("No more to read (type)");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (typ)");
+                    return false
+                }
                 Ok(Some(len)) => {
                     tot_read += len;
                     if tot_read == 4 {
                         // validate typ
-                        ptype = BigEndian::read_u32(&typ_buf); 
-                        println!("We got a type I think {}", ptype);
-                        return;
-                    }
+                        self.packet.ptype = BigEndian::read_u32(&typ_buf); 
+                        println!("We got a {}", PTYPES[self.packet.ptype as usize].name);
+                    };
+                    break
                 }
             }
         }
-
+        // Now the length
+        loop {
+            let mut tot_read = 0;
+            match self.socket.try_read(&mut size_buf) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return false
+                },
+                Ok(None) => {
+                    println!("Need size!");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (size)");
+                    return false
+                }
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    if tot_read == 4 {
+                        self.packet.psize = BigEndian::read_u32(&size_buf);
+                        println!("Data section is {} bytes", self.packet.psize);
+                    };
+                    break
+                }
+            }
+        }
+        self.packet.data.resize(self.packet.psize as usize, 0);
+        loop {
+            let mut tot_read = 0;
+            match self.socket.try_read(&mut self.packet.data) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return false
+                },
+                Ok(None) => {
+                    println!("done reading data, tot_read = {}", tot_read);
+                    break
+                },
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    println!("got {} out of {} bytes of data", len, tot_read);
+                    if tot_read >= psize as usize {
+                        println!("got all data");
+                        match self.packet.process() {
+                            None => println!("That's all folks"),
+                            Some(p) => {
+                                // we need to send this
+                                self.socket.try_write(&p.to_byteslice());
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        true
     }
 }
 
@@ -109,17 +183,21 @@ impl Handler for GearmanServer {
                 self.token_counter += 1;
                 let new_token = Token(self.token_counter);
 
-                self.remotes.insert(new_token, GearmanRemote { socket: remote_socket });
+                self.remotes.insert(new_token, GearmanRemote::new(remote_socket));
 
                 event_loop.register(&self.remotes[&new_token].socket,
                                     new_token, EventSet::readable(),
                                     PollOpt::edge() | PollOpt::oneshot()).unwrap();
             },
             token => {
+                println!("more from clients");
                 let mut remote = self.remotes.get_mut(&token).unwrap();
-                remote.read();
-                event_loop.reregister(&remote.socket, token, EventSet::readable(),
-                                      PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                if remote.read() {
+                    event_loop.reregister(&remote.socket, token, EventSet::readable(),
+                                          PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                } else {
+                    remote.socket.shutdown(Shutdown::Both).unwrap();
+                }
             },
         }
     }

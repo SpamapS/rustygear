@@ -49,6 +49,13 @@ pub const SUBMIT_JOB_LOW:     u32 = 33;
 pub const SUBMIT_JOB_LOW_BG:  u32 = 34;
 pub const SUBMIT_JOB_SCHED:   u32 = 35;
 pub const SUBMIT_JOB_EPOCH:   u32 = 36;
+pub const SUBMIT_REDUCE_JOB:  u32 = 37;
+pub const SUBMIT_REDUCE_JOB_BACKGROUND:  u32 = 38;
+pub const GRAB_JOB_ALL:       u32 = 39;
+pub const JOB_ASSIGN_ALL:     u32 = 40;
+pub const GET_STATUS_UNIQUE:  u32 = 41;
+pub const STATUS_RES_UNIQUE:  u32 = 42;
+
 
 pub const REQ: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
 pub const RES: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
