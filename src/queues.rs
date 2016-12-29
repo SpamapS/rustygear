@@ -33,11 +33,20 @@ impl QueueHolder {
         let mut ql = self.queues.clone();
         let mut queues = ql.lock().unwrap();
         for func in funcs.iter() {
+            debug!("looking for func={:?} in {:?}",
+                   func,
+                   *queues);
             match queues.get_mut(func) {
                 None => return None,
                 Some(prios) => {
+                    debug!("found func with {} priority queues", prios.len());
+                    let mut i = 0;
                     for q in prios {
-                        return q.pop_front();
+                        debug!("searching priority {}", i);
+                        i = i + 1;
+                        if !q.is_empty() {
+                            return q.pop_front();
+                        }
                     }
                 },
             }

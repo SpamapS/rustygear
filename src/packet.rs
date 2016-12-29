@@ -53,6 +53,7 @@ impl Iterator for Packet {
         for byte in &self.data[start..] {
             self._field_byte_count += 1;
             if *byte == '\0' as u8 {
+                self._field_byte_count -= 1; // Drop the null
                 break
             }
         };
@@ -251,6 +252,7 @@ impl Packet {
 
     fn handleCanDo(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
         let fname = self.nextField()?;
+        debug!("CAN_DO fname = {:?}", fname);
         worker.functions.insert(fname);
         Ok(None)
     }
@@ -266,13 +268,26 @@ impl Packet {
             None => {
                 return Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))));
             },
-            Some(j) => j,
+            Some(j) => {
+                let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
+                data.extend(j.handle);
+                data.push(b'\0');
+                data.extend(j.fname);
+                data.push(b'\0');
+                data.extend(j.unique);
+                data.push(b'\0');
+                // reducer not implemented
+                data.push(b'\0');
+                data.extend(j.data);
+                return Ok(Some(Packet::new_res(JOB_ASSIGN_ALL, data)))
+            },
         };
         Ok(None)
     }
 
     fn handleSubmitJob(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
         let fname = self.nextField()?;
+        debug!("fname = {:?}", &fname);
         let unique = self.nextField()?;
         let data = self.nextField()?;
         let j = Job::new(fname, unique, data);
