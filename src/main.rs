@@ -1,5 +1,6 @@
 extern crate mio;
 extern crate byteorder;
+extern crate uuid;
 
 use std::collections::{HashMap, VecDeque};
 use std::net::{Shutdown, SocketAddr};

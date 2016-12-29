@@ -6,8 +6,8 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 [dependencies]
 time = "0.1"
 byteorder = "0.3"
-uuid = "0.1"
+uuid = { version = "*", features = ["v4"] }
 hash_ring = "*"
 log = "*"
 env_logger = "*"
-mio = "*"
+mio = "0.5"

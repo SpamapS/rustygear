@@ -108,11 +108,8 @@ impl Packet {
         let fname = self.nextField()?;
         let unique = self.nextField()?;
         let data = self.nextField()?;
-        let j = Job {
-            fname: fname,
-            unique: unique,
-            data: data,
-        };
+        let j = Job::new(fname, unique, data);
+        println!("Created job {:?}", j);
         self.queues.add_job(j);
         Ok(None)
     }
