@@ -34,10 +34,11 @@ impl Iterator for Packet {
     type Item = (usize, usize);
     fn next(&mut self) -> Option<(usize, usize)> {
         let nargs = PTYPES[self.ptype as usize].nargs;
-        if self._field_count >= nargs {
+        if self._field_count > nargs {
             return None
         }
         self._field_count += 1;
+        println!("DEBUG: returning field #{}", self._field_count);
         if self._field_count == nargs {
             return Some((self._field_byte_count, self.data.len()))
         };
@@ -93,6 +94,8 @@ impl Packet {
             Some((start, finish)) => (start, finish),
         };
         let mut r = Vec::with_capacity(finish - start);
+        let new_size = r.capacity();
+        r.resize(new_size, 0);
         r.clone_from_slice(&self.data[start..finish]);
         Ok(r)
     }
