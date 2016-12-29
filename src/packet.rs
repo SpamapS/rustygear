@@ -25,7 +25,6 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
-    pub queues: QueueHolder,
     _field_byte_count: usize,
     _field_count: i8,
 }
@@ -60,22 +59,21 @@ pub struct ParseError {}
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
-    pub fn new(queues: QueueHolder) -> Packet {
+    pub fn new() -> Packet {
         Packet { 
             magic: PacketMagic::UNKNOWN,
             ptype: 0,
             psize: 0,
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
-            queues: queues,
             _field_byte_count: 0,
             _field_count: 0,
         }
     }
 
-    pub fn process(&mut self) -> Result<Option<Packet>> {
+    pub fn process(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
         match self.ptype {
             SUBMIT_JOB => {
-                match self.handleSubmitJob()? {
+                match self.handleSubmitJob(queues)? {
                     None => Ok(None),
                     Some(p) => {
                         println!("Should send a packet here {}",
@@ -104,13 +102,13 @@ impl Packet {
     }
 
 
-    fn handleSubmitJob(&mut self) -> Result<Option<Packet>> {
+    fn handleSubmitJob(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
         let fname = self.nextField()?;
         let unique = self.nextField()?;
         let data = self.nextField()?;
         let j = Job::new(fname, unique, data);
         println!("Created job {:?}", j);
-        self.queues.add_job(j);
+        queues.add_job(j);
         Ok(None)
     }
 

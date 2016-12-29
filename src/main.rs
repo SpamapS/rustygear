@@ -39,7 +39,7 @@ impl GearmanRemote {
     fn new(socket: TcpStream, queues: QueueHolder) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
-            packet: Packet::new(queues.clone()),
+            packet: Packet::new(),
             queues: queues,
         }
     }
@@ -156,7 +156,7 @@ impl GearmanRemote {
                     println!("got {} out of {} bytes of data", len, tot_read);
                     if tot_read >= psize as usize {
                         println!("got all data");
-                        match self.packet.process() {
+                        match self.packet.process(self.queues.clone()) {
                             Err(e) => println!("An error ocurred"),
                             Ok(pr) => {
                                 match pr {
