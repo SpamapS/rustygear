@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::net::{Shutdown, SocketAddr};
+use std::io;
 
 use byteorder::{ByteOrder, BigEndian};
+use mio::deprecated::{EventLoop, Handler, TryWrite};
 use mio::*;
 use mio::tcp::*;
+use bytes::buf::{Buf, ByteBuf};
 
 use constants::*;
-use packet::{Packet, PacketMagic, PTYPES};
+use packet::{Packet, PacketMagic, PTYPES, EofError};
 use queues::QueueHolder;
 use worker::Worker;
 
@@ -15,6 +18,8 @@ struct GearmanRemote {
     packet: Packet,
     queues: QueueHolder,
     worker: Worker,
+    sendqueue: Vec<ByteBuf>,
+    interest: Ready,
 }
 
 pub struct GearmanServer {
@@ -34,144 +39,44 @@ impl GearmanRemote {
             packet: Packet::new(),
             queues: queues,
             worker: Worker::new(),
+            sendqueue: Vec::with_capacity(2), // Don't need many bufs
+            interest: Ready::readable(),
         }
     }
 
-    pub fn read(&mut self) -> bool {
-        let mut magic_buf = [0; 4];
-        let mut typ_buf = [0; 4];
-        let mut size_buf = [0; 4];
-        let mut psize: u32 = 0;
-        loop {
-            let mut tot_read = 0;
-            match self.socket.try_read(&mut magic_buf) {
-                Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
-                    return false
-                },
-                Ok(None) => {
-                    println!("No more to read");
-                    break
-                },
-                Ok(Some(0)) => {
-                    println!("Eof (magic)");
-                    return false
-                }
-                Ok(Some(len)) => {
-                    tot_read += len;
-                    if tot_read == 4 {
-                        // Is this a req/res
-                        match magic_buf {
-                            REQ => {
-                                self.packet.magic = PacketMagic::REQ;
-                            },
-                            RES => {
-                                self.packet.magic = PacketMagic::RES;
-                            },
-                            // TEXT/ADMIN protocol
-                            _ => {
-                                println!("Possible admin protocol usage");
-                                self.packet.magic = PacketMagic::TEXT;
-                                return true
-                            },
-                        }
-                    };
-                    break
-                },
+    pub fn read(&mut self) -> Result<(), EofError> {
+        match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone())? {
+            None => println!("That's all folks {:?}", self.interest),
+            Some(p) => {
+                println!("Queueing {:?}", &p);
+                self.sendqueue.push(ByteBuf::from_slice(&p.to_byteslice()));
+                self.interest.remove(Ready::readable());
+                self.interest.insert(Ready::writable());
             }
         }
-        // Now get the type
-        loop {
-            let mut tot_read = 0;
-            match self.socket.try_read(&mut typ_buf) {
-                Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
-                    return false
-                },
-                Ok(None) => {
-                    println!("No more to read (type)");
-                    break
-                },
-                Ok(Some(0)) => {
-                    println!("Eof (typ)");
-                    return false
-                }
-                Ok(Some(len)) => {
-                    tot_read += len;
-                    if tot_read == 4 {
-                        // validate typ
-                        self.packet.ptype = BigEndian::read_u32(&typ_buf); 
-                        println!("We got a {}", PTYPES[self.packet.ptype as usize].name);
-                    };
-                    break
-                }
+        Ok(())
+    }
+
+    pub fn write(&mut self) -> Result<(), io::Error> {
+        while !self.sendqueue.is_empty() {
+            if !self.sendqueue.first().unwrap().has_remaining() {
+                self.sendqueue.pop();
+                continue;
             }
-        }
-        // Now the length
-        loop {
-            let mut tot_read = 0;
-            match self.socket.try_read(&mut size_buf) {
-                Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
-                    return false
-                },
-                Ok(None) => {
-                    println!("Need size!");
-                    break
-                },
-                Ok(Some(0)) => {
-                    println!("Eof (size)");
-                    return false
+            let buf = self.sendqueue.first_mut().unwrap();
+            match self.socket.try_write(buf.bytes())? {
+                None => break,
+                Some(n) => {
+                    buf.advance(n);
+                    continue
                 }
-                Ok(Some(len)) => {
-                    tot_read += len;
-                    if tot_read == 4 {
-                        self.packet.psize = BigEndian::read_u32(&size_buf);
-                        println!("Data section is {} bytes", self.packet.psize);
-                    };
-                    break
-                }
-            }
+            };
         }
-        self.packet.data.resize(self.packet.psize as usize, 0);
-        loop {
-            let mut tot_read = 0;
-            match self.socket.try_read(&mut self.packet.data) {
-                Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
-                    return false
-                },
-                Ok(None) => {
-                    println!("done reading data, tot_read = {}", tot_read);
-                    break
-                },
-                Ok(Some(len)) => {
-                    tot_read += len;
-                    println!("got {} out of {} bytes of data", len, tot_read);
-                    if tot_read >= psize as usize {
-                        println!("got all data");
-                        {
-                            let worker = &mut self.worker;
-                            match self.packet.process(self.queues.clone(), worker) {
-                                Err(e) => println!("An error ocurred"),
-                                Ok(pr) => {
-                                    match pr {
-                                        None => println!("That's all folks"),
-                                        Some(p) => {
-                                            // we need to send this
-                                            println!("Sending {:?}", &p);
-                                            self.socket.try_write(&p.to_byteslice());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        true
+        if self.sendqueue.is_empty() {
+            self.interest.remove(Ready::writable());
+            self.interest.insert(Ready::readable());
+        };
+        Ok(())
     }
 }
 
@@ -191,38 +96,52 @@ impl Handler for GearmanServer {
     type Message = ();
 
     fn ready(&mut self, event_loop: &mut EventLoop<GearmanServer>,
-             token: Token, events: EventSet)
+             token: Token, events: Ready)
     {
-        match token {
-            SERVER_TOKEN => {
-                let remote_socket = match self.socket.accept() {
-                    Err(e) => {
-                        println!("Accept error: {}", e);
-                        return;
-                    },
-                    Ok(None) => unreachable!("Accept has returned 'None'"),
-                    Ok(Some((sock, addr))) => sock
-                };
+        if events.is_readable() {
+            match token {
+                SERVER_TOKEN => {
+                    let remote_socket = match self.socket.accept() {
+                        Err(e) => {
+                            println!("Accept error: {}", e);
+                            return;
+                        },
+                        Ok((sock, addr)) => sock,
+                    };
 
-                self.token_counter += 1;
-                let new_token = Token(self.token_counter);
+                    self.token_counter += 1;
+                    let new_token = Token(self.token_counter);
 
-                self.remotes.insert(new_token, GearmanRemote::new(remote_socket, self.queues.clone()));
+                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, self.queues.clone()));
 
-                event_loop.register(&self.remotes[&new_token].socket,
-                                    new_token, EventSet::readable(),
-                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
-            },
-            token => {
-                println!("more from clients");
-                let mut remote = self.remotes.get_mut(&token).unwrap();
-                if remote.read() {
-                    event_loop.reregister(&remote.socket, token, EventSet::readable(),
-                                          PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                } else {
-                    remote.socket.shutdown(Shutdown::Both).unwrap();
-                }
-            },
+                    event_loop.register(&self.remotes[&new_token].socket,
+                                        new_token, Ready::readable(),
+                                        PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                },
+                token => {
+                    println!("more from clients");
+                    let mut remote = self.remotes.get_mut(&token).unwrap();
+                    match remote.read() {
+                        Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
+                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                        Err(e) => remote.socket.shutdown(Shutdown::Both).unwrap(),
+                    }
+                },
+            }
+        }
+
+        if events.is_writable() {
+            match token {
+                SERVER_TOKEN => panic!("Received writable event for server socket."),
+                token => {
+                    let mut remote = self.remotes.get_mut(&token).unwrap();
+                    match remote.write() {
+                        Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
+                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                        Err(e) => remote.socket.shutdown(Shutdown::Both).unwrap(),
+                    }
+                },
+            }
         }
     }
 }

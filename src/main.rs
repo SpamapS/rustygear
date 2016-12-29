@@ -1,10 +1,12 @@
-extern crate mio;
 extern crate byteorder;
+extern crate bytes;
+extern crate mio;
 extern crate uuid;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use mio::*;
+use mio::deprecated::EventLoop;
 use mio::tcp::*;
 
 pub mod constants;
@@ -33,7 +35,7 @@ fn main() {
 
     event_loop.register(&server.socket,
                         Token(0),
-                        EventSet::readable(),
+                        Ready::readable(),
                         PollOpt::edge()).unwrap();
 
     event_loop.run(&mut server).unwrap();

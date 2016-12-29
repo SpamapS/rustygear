@@ -2,7 +2,10 @@ use std::fmt;
 use std::io;
 use std::result;
 
-use byteorder::{BigEndian, WriteBytesExt};
+use mio::tcp::*;
+use mio::deprecated::TryRead;
+use mio::*;
+use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use constants::*;
 use job::*;
@@ -58,6 +61,7 @@ impl Iterator for Packet {
 }
 
 pub struct ParseError {}
+pub struct EofError {}
 
 pub type Result<T> = result::Result<T, ParseError>;
 
@@ -82,6 +86,141 @@ impl Packet {
             _field_byte_count: 0,
             _field_count: 0,
         }
+    }
+
+    pub fn from_socket(&mut self,
+                       socket: &mut TcpStream,
+                       worker: &mut Worker,
+                       queues: QueueHolder) -> result::Result<Option<Packet>, EofError> {
+        let mut magic_buf = [0; 4];
+        let mut typ_buf = [0; 4];
+        let mut size_buf = [0; 4];
+        let mut psize: u32 = 0;
+        loop {
+            let mut tot_read = 0;
+            match socket.try_read(&mut magic_buf) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return Err(EofError {})
+                },
+                Ok(None) => {
+                    println!("No more to read");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (magic)");
+                    return Err(EofError {})
+                }
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    if tot_read == 4 {
+                        // Is this a req/res
+                        match magic_buf {
+                            REQ => {
+                                self.magic = PacketMagic::REQ;
+                            },
+                            RES => {
+                                self.magic = PacketMagic::RES;
+                            },
+                            // TEXT/ADMIN protocol
+                            _ => {
+                                println!("Possible admin protocol usage");
+                                self.magic = PacketMagic::TEXT;
+                                return Ok(None)
+                            },
+                        }
+                    };
+                    break
+                },
+            }
+        }
+        // Now get the type
+        loop {
+            let mut tot_read = 0;
+            match socket.try_read(&mut typ_buf) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return Err(EofError {})
+                },
+                Ok(None) => {
+                    println!("No more to read (type)");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (typ)");
+                    return Err(EofError {})
+                }
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    if tot_read == 4 {
+                        // validate typ
+                        self.ptype = BigEndian::read_u32(&typ_buf); 
+                        println!("We got a {}", PTYPES[self.ptype as usize].name);
+                    };
+                    break
+                }
+            }
+        }
+        // Now the length
+        loop {
+            let mut tot_read = 0;
+            match socket.try_read(&mut size_buf) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return Err(EofError {})
+                },
+                Ok(None) => {
+                    println!("Need size!");
+                    break
+                },
+                Ok(Some(0)) => {
+                    println!("Eof (size)");
+                    return Err(EofError {})
+                }
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    if tot_read == 4 {
+                        self.psize = BigEndian::read_u32(&size_buf);
+                        println!("Data section is {} bytes", self.psize);
+                    };
+                    break
+                }
+            }
+        }
+        self.data.resize(self.psize as usize, 0);
+        loop {
+            let mut tot_read = 0;
+            match socket.try_read(&mut self.data) {
+                Err(e) => {
+                    println!("Error while reading socket: {:?}", e);
+                    return Err(EofError {})
+                },
+                Ok(None) => {
+                    println!("done reading data, tot_read = {}", tot_read);
+                    break
+                },
+                Ok(Some(len)) => {
+                    tot_read += len;
+                    println!("got {} out of {} bytes of data", len, tot_read);
+                    if tot_read >= psize as usize {
+                        println!("got all data");
+                        {
+                            match self.process(queues.clone(), worker) {
+                                Err(e) => {
+                                    println!("An error ocurred");
+                                    return Err(EofError {})
+                                },
+                                Ok(pr) => {
+                                    return Ok(pr)
+                                }
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn process(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
