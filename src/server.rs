@@ -46,9 +46,9 @@ impl GearmanRemote {
 
     pub fn read(&mut self) -> Result<(), EofError> {
         match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone())? {
-            None => println!("That's all folks {:?}", self.interest),
+            None => debug!("Done reading"),
             Some(p) => {
-                println!("Queueing {:?}", &p);
+                info!("Queueing {:?}", &p);
                 self.sendqueue.push(ByteBuf::from_slice(&p.to_byteslice()));
                 self.interest.remove(Ready::readable());
                 self.interest.insert(Ready::writable());
@@ -103,7 +103,7 @@ impl Handler for GearmanServer {
                 SERVER_TOKEN => {
                     let remote_socket = match self.socket.accept() {
                         Err(e) => {
-                            println!("Accept error: {}", e);
+                            error!("Accept error: {}", e);
                             return;
                         },
                         Ok((sock, addr)) => sock,
@@ -119,7 +119,6 @@ impl Handler for GearmanServer {
                                         PollOpt::edge() | PollOpt::oneshot()).unwrap();
                 },
                 token => {
-                    println!("more from clients");
                     let mut remote = self.remotes.get_mut(&token).unwrap();
                     match remote.read() {
                         Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,

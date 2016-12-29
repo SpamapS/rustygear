@@ -45,7 +45,7 @@ impl Iterator for Packet {
             return None
         }
         self._field_count += 1;
-        println!("DEBUG: returning field #{}", self._field_count);
+        debug!("DEBUG: returning field #{}", self._field_count);
         if self._field_count == nargs {
             return Some((self._field_byte_count, self.data.len()))
         };
@@ -100,15 +100,15 @@ impl Packet {
             let mut tot_read = 0;
             match socket.try_read(&mut magic_buf) {
                 Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
+                    error!("Error while reading socket: {:?}", e);
                     return Err(EofError {})
                 },
                 Ok(None) => {
-                    println!("No more to read");
+                    debug!("No more to read");
                     break
                 },
                 Ok(Some(0)) => {
-                    println!("Eof (magic)");
+                    debug!("Eof (magic)");
                     return Err(EofError {})
                 }
                 Ok(Some(len)) => {
@@ -124,7 +124,7 @@ impl Packet {
                             },
                             // TEXT/ADMIN protocol
                             _ => {
-                                println!("Possible admin protocol usage");
+                                debug!("Possible admin protocol usage");
                                 self.magic = PacketMagic::TEXT;
                                 return Ok(None)
                             },
@@ -139,15 +139,15 @@ impl Packet {
             let mut tot_read = 0;
             match socket.try_read(&mut typ_buf) {
                 Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
+                    error!("Error while reading socket: {:?}", e);
                     return Err(EofError {})
                 },
                 Ok(None) => {
-                    println!("No more to read (type)");
+                    debug!("No more to read (type)");
                     break
                 },
                 Ok(Some(0)) => {
-                    println!("Eof (typ)");
+                    debug!("Eof (typ)");
                     return Err(EofError {})
                 }
                 Ok(Some(len)) => {
@@ -155,7 +155,7 @@ impl Packet {
                     if tot_read == 4 {
                         // validate typ
                         self.ptype = BigEndian::read_u32(&typ_buf); 
-                        println!("We got a {}", PTYPES[self.ptype as usize].name);
+                        debug!("We got a {}", PTYPES[self.ptype as usize].name);
                     };
                     break
                 }
@@ -166,22 +166,22 @@ impl Packet {
             let mut tot_read = 0;
             match socket.try_read(&mut size_buf) {
                 Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
+                    error!("Error while reading socket: {:?}", e);
                     return Err(EofError {})
                 },
                 Ok(None) => {
-                    println!("Need size!");
+                    debug!("Need size!");
                     break
                 },
                 Ok(Some(0)) => {
-                    println!("Eof (size)");
+                    debug!("Eof (size)");
                     return Err(EofError {})
                 }
                 Ok(Some(len)) => {
                     tot_read += len;
                     if tot_read == 4 {
                         self.psize = BigEndian::read_u32(&size_buf);
-                        println!("Data section is {} bytes", self.psize);
+                        debug!("Data section is {} bytes", self.psize);
                     };
                     break
                 }
@@ -192,22 +192,22 @@ impl Packet {
             let mut tot_read = 0;
             match socket.try_read(&mut self.data) {
                 Err(e) => {
-                    println!("Error while reading socket: {:?}", e);
+                    error!("Error while reading socket: {:?}", e);
                     return Err(EofError {})
                 },
                 Ok(None) => {
-                    println!("done reading data, tot_read = {}", tot_read);
+                    debug!("done reading data, tot_read = {}", tot_read);
                     break
                 },
                 Ok(Some(len)) => {
                     tot_read += len;
-                    println!("got {} out of {} bytes of data", len, tot_read);
+                    debug!("got {} out of {} bytes of data", len, tot_read);
                     if tot_read >= psize as usize {
-                        println!("got all data");
+                        debug!("got all data");
                         {
                             match self.process(queues.clone(), worker) {
                                 Err(e) => {
-                                    println!("An error ocurred");
+                                    error!("An error ocurred");
                                     return Err(EofError {})
                                 },
                                 Ok(pr) => {
@@ -230,7 +230,7 @@ impl Packet {
             CANT_DO => self.handleCantDo(worker)?,
             GRAB_JOB_ALL => self.handleGrabJobAll(queues, worker)?,
             _ => {
-                println!("Unimplemented: {:?} processing packet", self);
+                debug!("Unimplemented: {:?} processing packet", self);
                 None
             },
         };
@@ -276,7 +276,7 @@ impl Packet {
         let unique = self.nextField()?;
         let data = self.nextField()?;
         let j = Job::new(fname, unique, data);
-        println!("Created job {:?}", j);
+        info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);
         Ok(Some(p))
