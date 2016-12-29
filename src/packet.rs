@@ -20,6 +20,7 @@ pub enum PacketMagic {
     UNKNOWN,
     REQ,
     RES,
+    TEXT,
 }
 
 pub struct Packet {
@@ -149,6 +150,9 @@ impl Packet {
             PacketMagic::UNKNOWN => panic!("Unknown packet magic cannot be sent"),
             PacketMagic::REQ => REQ,
             PacketMagic::RES => RES,
+            PacketMagic::TEXT => {
+                return self.data.clone().into_boxed_slice();
+            },
         };
         buf.extend(magic.iter());
         buf.write_u32::<BigEndian>(self.ptype);
@@ -164,6 +168,7 @@ impl fmt::Debug for Packet {
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",
+                   PacketMagic::TEXT => "TEXT",
                    _ => "UNKNOWN",
                },
                PTYPES[self.ptype as usize].name,
