@@ -1,6 +1,10 @@
+use std::io;
+use std::result;
+
 use byteorder::{BigEndian, WriteBytesExt};
 
 use constants::*;
+use job::*;
 
 pub struct PacketType {
     pub name: &'static str,
@@ -20,9 +24,37 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
+    _field_byte_count: usize,
+    _field_count: i8,
 }
 
 const READ_BUFFER_INIT_CAPACITY: usize = 2048;
+
+impl Iterator for Packet {
+    type Item = (usize, usize);
+    fn next(&mut self) -> Option<(usize, usize)> {
+        let nargs = PTYPES[self.ptype as usize].nargs;
+        if self._field_count >= nargs {
+            return None
+        }
+        self._field_count += 1;
+        if self._field_count == nargs {
+            return Some((self._field_byte_count, self.data.len()))
+        };
+        let start = self._field_byte_count;
+        for byte in &self.data[start..] {
+            self._field_byte_count += 1;
+            if *byte == '\0' as u8 {
+                break
+            }
+        };
+        Some((start, self._field_byte_count))
+    }
+}
+
+pub struct ParseError {}
+
+pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
     pub fn new() -> Packet {
@@ -31,12 +63,51 @@ impl Packet {
             ptype: 0,
             psize: 0,
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
+            _field_byte_count: 0,
+            _field_count: 0,
         }
     }
 
-    pub fn process(&self) -> Option<Packet> {
-        println!("Unimplemented: processing packet");
-        None
+    pub fn process(&mut self) -> Result<Option<Packet>> {
+        match self.ptype {
+            SUBMIT_JOB => {
+                match self.handleSubmitJob()? {
+                    None => Ok(None),
+                    Some(p) => {
+                        println!("Should send a packet here {}",
+                                 PTYPES[p.ptype as usize].name);
+                        Ok(None)
+                    }
+                }
+            },
+            _ => {
+                println!("Unimplemented: processing packet");
+                Ok(None)
+            },
+        }
+    }
+
+    fn nextField(&mut self) -> Result<Vec<u8>> {
+        let (start, finish) = match self.next() {
+            None => return Err(ParseError{}),
+            Some((start, finish)) => (start, finish),
+        };
+        let mut r = Vec::with_capacity(finish - start);
+        r.clone_from_slice(&self.data[start..finish]);
+        Ok(r)
+    }
+
+
+    fn handleSubmitJob(&mut self) -> Result<Option<Packet>> {
+        let fname = self.nextField()?;
+        let unique = self.nextField()?;
+        let data = self.nextField()?;
+        let j = Job {
+            fname: fname,
+            unique: unique,
+            data: data,
+        };
+        Ok(None)
     }
 
     pub fn to_byteslice(&self) -> Box<[u8]> {

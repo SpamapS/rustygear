@@ -6,6 +6,8 @@ use std::net::{Shutdown, SocketAddr};
 
 pub mod constants;
 use constants::*;
+pub mod job;
+use job::*;
 pub mod packet;
 use packet::*;
 
@@ -147,10 +149,15 @@ impl GearmanRemote {
                     if tot_read >= psize as usize {
                         println!("got all data");
                         match self.packet.process() {
-                            None => println!("That's all folks"),
-                            Some(p) => {
-                                // we need to send this
-                                self.socket.try_write(&p.to_byteslice());
+                            Err(e) => println!("An error ocurred"),
+                            Ok(pr) => {
+                                match pr {
+                                    None => println!("That's all folks"),
+                                    Some(p) => {
+                                        // we need to send this
+                                        self.socket.try_write(&p.to_byteslice());
+                                    }
+                                }
                             }
                         }
                     }
