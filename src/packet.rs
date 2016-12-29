@@ -1,3 +1,4 @@
+use std::fmt;
 use std::io;
 use std::result;
 
@@ -70,15 +71,25 @@ impl Packet {
         }
     }
 
+    pub fn new_res(ptype: u32, data: Box<Vec<u8>>) -> Packet {
+        Packet {
+            magic: PacketMagic::RES,
+            ptype: ptype,
+            psize: data.len() as u32,
+            data: data,
+            _field_byte_count: 0,
+            _field_count: 0,
+        }
+    }
+
     pub fn process(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
         match self.ptype {
             SUBMIT_JOB => {
                 match self.handleSubmitJob(queues)? {
                     None => Ok(None),
                     Some(p) => {
-                        println!("Should send a packet here {}",
-                                 PTYPES[p.ptype as usize].name);
-                        Ok(None)
+                        println!("Should send a packet here {:?}", p);
+                        Ok(Some(p))
                     }
                 }
             },
@@ -108,8 +119,9 @@ impl Packet {
         let data = self.nextField()?;
         let j = Job::new(fname, unique, data);
         println!("Created job {:?}", j);
+        let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);
-        Ok(None)
+        Ok(Some(p))
     }
 
     pub fn to_byteslice(&self) -> Box<[u8]> {
@@ -125,6 +137,19 @@ impl Packet {
         buf.write_u32::<BigEndian>(self.psize);
         buf.extend(self.data.iter());
         buf.into_boxed_slice()
+    }
+}
+
+impl fmt::Debug for Packet {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {} }}",
+               match self.magic {
+                   PacketMagic::REQ => "REQ",
+                   PacketMagic::RES => "RES",
+                   _ => "UNKNOWN",
+               },
+               PTYPES[self.ptype as usize].name,
+               self.psize)
     }
 }
 
