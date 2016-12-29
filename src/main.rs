@@ -1,8 +1,9 @@
 extern crate mio;
 extern crate byteorder;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::net::{Shutdown, SocketAddr};
+use std::rc::Rc;
 
 pub mod constants;
 use constants::*;
@@ -10,6 +11,8 @@ pub mod job;
 use job::*;
 pub mod packet;
 use packet::*;
+pub mod queues;
+use queues::*;
 
 use self::byteorder::{ByteOrder, BigEndian};
 use self::mio::*;
@@ -18,21 +21,25 @@ use self::mio::tcp::*;
 struct GearmanRemote {
     socket: TcpStream,
     packet: Packet,
+    queues: QueueHolder,
 }
 
 struct GearmanServer {
     socket: TcpListener,
     remotes: HashMap<Token, GearmanRemote>,
     token_counter: usize,
+    queues: QueueHolder,
 }
+
 
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    fn new(socket: TcpStream) -> GearmanRemote {
+    fn new(socket: TcpStream, queues: QueueHolder) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
-            packet: Packet::new(),
+            packet: Packet::new(queues.clone()),
+            queues: queues,
         }
     }
 
@@ -190,7 +197,7 @@ impl Handler for GearmanServer {
                 self.token_counter += 1;
                 let new_token = Token(self.token_counter);
 
-                self.remotes.insert(new_token, GearmanRemote::new(remote_socket));
+                self.remotes.insert(new_token, GearmanRemote::new(remote_socket, self.queues.clone()));
 
                 event_loop.register(&self.remotes[&new_token].socket,
                                     new_token, EventSet::readable(),
@@ -215,10 +222,13 @@ fn main() {
     let server_socket = TcpListener::bind(&address).unwrap();
     let mut event_loop = EventLoop::new().unwrap();
 
+    let mut queues = QueueHolder::new();
+
     let mut server = GearmanServer {
         token_counter: 1,
         remotes: HashMap::new(),
         socket: server_socket,
+        queues: queues.clone(),
     };
 
     event_loop.register(&server.socket,

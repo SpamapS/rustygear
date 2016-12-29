@@ -5,6 +5,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use constants::*;
 use job::*;
+use queues::QueueHolder;
 
 pub struct PacketType {
     pub name: &'static str,
@@ -24,6 +25,7 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
+    pub queues: QueueHolder,
     _field_byte_count: usize,
     _field_count: i8,
 }
@@ -58,12 +60,13 @@ pub struct ParseError {}
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
-    pub fn new() -> Packet {
+    pub fn new(queues: QueueHolder) -> Packet {
         Packet { 
             magic: PacketMagic::UNKNOWN,
             ptype: 0,
             psize: 0,
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
+            queues: queues,
             _field_byte_count: 0,
             _field_count: 0,
         }
@@ -110,6 +113,7 @@ impl Packet {
             unique: unique,
             data: data,
         };
+        self.queues.add_job(j);
         Ok(None)
     }
 
