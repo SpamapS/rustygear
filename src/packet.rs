@@ -6,6 +6,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use constants::*;
 use job::*;
+use worker::Worker;
 use queues::QueueHolder;
 
 pub struct PacketType {
@@ -82,22 +83,18 @@ impl Packet {
         }
     }
 
-    pub fn process(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
-        match self.ptype {
-            SUBMIT_JOB => {
-                match self.handleSubmitJob(queues)? {
-                    None => Ok(None),
-                    Some(p) => {
-                        println!("Should send a packet here {:?}", p);
-                        Ok(Some(p))
-                    }
-                }
-            },
+    pub fn process(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+        let p = match self.ptype {
+            SUBMIT_JOB => self.handleSubmitJob(queues)?,
+            CAN_DO => self.handleCanDo(worker)?,
+            CANT_DO => self.handleCantDo(worker)?,
+            GRAB_JOB_ALL => self.handleGrabJobAll(queues, worker)?,
             _ => {
-                println!("Unimplemented: processing packet");
-                Ok(None)
+                println!("Unimplemented: {:?} processing packet", self);
+                None
             },
-        }
+        };
+        Ok(p)
     }
 
     fn nextField(&mut self) -> Result<Vec<u8>> {
@@ -112,6 +109,27 @@ impl Packet {
         Ok(r)
     }
 
+    fn handleCanDo(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        let fname = self.nextField()?;
+        worker.functions.insert(fname);
+        Ok(None)
+    }
+
+    fn handleCantDo(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        let fname = self.nextField()?;
+        worker.functions.remove(&fname);
+        Ok(None)
+    }
+
+    fn handleGrabJobAll(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+        let j = match queues.get_job(&worker.functions) {
+            None => {
+                return Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))));
+            },
+            Some(j) => j,
+        };
+        Ok(None)
+    }
 
     fn handleSubmitJob(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
         let fname = self.nextField()?;

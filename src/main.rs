@@ -14,6 +14,8 @@ pub mod packet;
 use packet::*;
 pub mod queues;
 use queues::*;
+pub mod worker;
+use worker::*;
 
 use self::byteorder::{ByteOrder, BigEndian};
 use self::mio::*;
@@ -23,6 +25,7 @@ struct GearmanRemote {
     socket: TcpStream,
     packet: Packet,
     queues: QueueHolder,
+    worker: Worker,
 }
 
 struct GearmanServer {
@@ -41,6 +44,7 @@ impl GearmanRemote {
             socket: socket,
             packet: Packet::new(),
             queues: queues,
+            worker: Worker::new(),
         }
     }
 
@@ -156,14 +160,18 @@ impl GearmanRemote {
                     println!("got {} out of {} bytes of data", len, tot_read);
                     if tot_read >= psize as usize {
                         println!("got all data");
-                        match self.packet.process(self.queues.clone()) {
-                            Err(e) => println!("An error ocurred"),
-                            Ok(pr) => {
-                                match pr {
-                                    None => println!("That's all folks"),
-                                    Some(p) => {
-                                        // we need to send this
-                                        self.socket.try_write(&p.to_byteslice());
+                        {
+                            let worker = &mut self.worker;
+                            match self.packet.process(self.queues.clone(), worker) {
+                                Err(e) => println!("An error ocurred"),
+                                Ok(pr) => {
+                                    match pr {
+                                        None => println!("That's all folks"),
+                                        Some(p) => {
+                                            // we need to send this
+                                            println!("Sending {:?}", &p);
+                                            self.socket.try_write(&p.to_byteslice());
+                                        }
                                     }
                                 }
                             }

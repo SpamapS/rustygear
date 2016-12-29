@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use job::Job;
 
@@ -27,5 +27,21 @@ impl QueueHolder {
             queues.insert(job.fname.clone(), [high_queue, norm_queue, low_queue]);
         }
         queues.get_mut(&job.fname).unwrap()[1].push_back(job)
+    }
+
+    pub fn get_job(&mut self, funcs: &HashSet<Vec<u8>>) -> Option<Job> {
+        let mut ql = self.queues.clone();
+        let mut queues = ql.lock().unwrap();
+        for func in funcs.iter() {
+            match queues.get_mut(func) {
+                None => return None,
+                Some(prios) => {
+                    for q in prios {
+                        return q.pop_front();
+                    }
+                },
+            }
+        }
+        None
     }
 }
