@@ -20,6 +20,7 @@ struct GearmanRemote {
     worker: Worker,
     sendqueue: Vec<ByteBuf>,
     interest: Ready,
+    token: Token,
 }
 
 pub struct GearmanServer {
@@ -33,20 +34,21 @@ pub struct GearmanServer {
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    pub fn new(socket: TcpStream, addr: SocketAddr, queues: QueueHolder) -> GearmanRemote {
+    pub fn new(socket: TcpStream, addr: SocketAddr, queues: QueueHolder, token: Token) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
             addr: addr,
-            packet: Packet::new(),
+            packet: Packet::new(token),
             queues: queues,
             worker: Worker::new(),
             sendqueue: Vec::with_capacity(2), // Don't need many bufs
             interest: Ready::readable(),
+            token: token,
         }
     }
 
     pub fn read(&mut self) -> Result<(), EofError> {
-        match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone())? {
+        match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone(), self.token)? {
             None => debug!("Done reading"),
             Some(p) => {
                 info!("Queueing {:?}", &p);
@@ -130,7 +132,7 @@ impl Handler for GearmanServer {
                     self.token_counter += 1;
                     let new_token = Token(self.token_counter);
 
-                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, remote_addr, self.queues.clone()));
+                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, remote_addr, self.queues.clone(), new_token));
 
                     event_loop.register(&self.remotes[&new_token].socket,
                                         new_token, Ready::readable(),

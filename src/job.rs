@@ -1,5 +1,6 @@
 use std::fmt;
 
+use mio::Token;
 use uuid::{Uuid, UuidVersion};
 
 pub struct Job {
@@ -7,6 +8,7 @@ pub struct Job {
    pub fname: Vec<u8>,
    pub unique: Vec<u8>,
    pub data: Vec<u8>,
+   pub remotes: Vec<Token>,
 }
 
 impl Job {
@@ -17,16 +19,18 @@ impl Job {
             fname: fname,
             unique: unique,
             data: data,
+            remotes: Vec::with_capacity(1),
         }
     }
 }
 
 impl fmt::Debug for Job {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Job {{ handle: {}, fname: {}, unique: {}, +{} data }}",
+        write!(f, "Job {{ handle: {}, fname: {}, unique: {}, remote: {:?}, +{} data }}",
                String::from_utf8_lossy(&self.handle),
                String::from_utf8_lossy(&self.fname),
                String::from_utf8_lossy(&self.unique),
+               &self.remotes,
                self.data.len())
     }
 }

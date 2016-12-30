@@ -2,6 +2,7 @@ use std::fmt;
 use std::result;
 use std::str;
 
+use mio::Token;
 use mio::tcp::*;
 use mio::deprecated::TryRead;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
@@ -53,6 +54,7 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
+    pub remote: Option<Token>,
     _field_byte_count: usize,
     _field_count: i8,
 }
@@ -92,23 +94,28 @@ pub struct EofError {}
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
-    pub fn new() -> Packet {
+    pub fn new(remote: Token) -> Packet {
         Packet { 
             magic: PacketMagic::UNKNOWN,
             ptype: 0,
             psize: 0,
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
+            remote: Some(remote),
             _field_byte_count: 0,
             _field_count: 0,
         }
     }
 
     pub fn new_res(ptype: u32, data: Box<Vec<u8>>) -> Packet {
+        Packet::new_res_remote(ptype, data, None)
+    }
+    pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<Token>) -> Packet {
         Packet {
             magic: PacketMagic::RES,
             ptype: ptype,
             psize: data.len() as u32,
             data: data,
+            remote: remote,
             _field_byte_count: 0,
             _field_count: 0,
         }
@@ -117,7 +124,8 @@ impl Packet {
     pub fn from_socket(&mut self,
                        socket: &mut TcpStream,
                        worker: &mut Worker,
-                       queues: QueueHolder) -> result::Result<Option<Packet>, EofError> {
+                       queues: QueueHolder,
+                       remote: Token) -> result::Result<Option<Packet>, EofError> {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
@@ -231,7 +239,7 @@ impl Packet {
                     if tot_read >= psize as usize {
                         debug!("got all data");
                         {
-                            match self.process(queues.clone(), worker) {
+                            match self.process(queues.clone(), worker, remote) {
                                 Err(_) => {
                                     error!("Packet parsing error");
                                     return Err(EofError {})
@@ -249,9 +257,9 @@ impl Packet {
         Ok(None)
     }
 
-    pub fn process(&mut self, queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+    pub fn process(&mut self, queues: QueueHolder, worker: &mut Worker, remote: Token) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues)?,
+            SUBMIT_JOB => self.handle_submit_job(queues, remote)?,
             CAN_DO => self.handle_can_do(worker)?,
             CANT_DO => self.handle_cant_do(worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
@@ -311,12 +319,13 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_submit_job(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
+    fn handle_submit_job(&mut self, mut queues: QueueHolder, remote: Token) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("fname = {:?}", &fname);
         let unique = self.next_field()?;
         let data = self.next_field()?;
-        let j = Job::new(fname, unique, data);
+        let mut j = Job::new(fname, unique, data);
+        j.remotes.push(remote);
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);
@@ -327,6 +336,7 @@ impl Packet {
         let handle = self.next_field()?;
         let data = self.next_field()?;
         info!("Job is complete {:?}", handle);
+        let mut ret = Ok(None);
         match worker.job {
             Some(ref j) => {
                 if j.handle != handle {
@@ -335,6 +345,13 @@ impl Packet {
                     data.push(b'\0');
                     data.extend_from_slice(msg.as_bytes());
                     return Ok(Some(Packet::new_res(ERROR, data)))
+                }
+                if !j.remotes.is_empty() {
+                    let mut client_data: Box<Vec<u8>> = Box::new(Vec::with_capacity(handle.len() + 1 + data.len()));
+                    client_data.extend(&j.handle);
+                    client_data.push(b'\0');
+                    client_data.extend(&data);
+                    ret = Ok(Some(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(j.remotes[0]))));
                 }
             },
             None => {
@@ -345,9 +362,8 @@ impl Packet {
                 return Ok(Some(Packet::new_res(ERROR, data)))
             }
         }
-        // TODO: send packet to _client_ if present
         worker.job = None;
-        Ok(None)
+        ret
     }
 
     pub fn to_byteslice(&self) -> Box<[u8]> {
@@ -371,7 +387,7 @@ impl Packet {
 
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {} }}",
+        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?} }}",
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",
@@ -379,7 +395,8 @@ impl fmt::Debug for Packet {
                    _ => "UNKNOWN",
                },
                PTYPES[self.ptype as usize].name,
-               self.psize)
+               self.psize,
+               self.remote)
     }
 }
 
