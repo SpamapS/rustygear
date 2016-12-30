@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::{Shutdown, SocketAddr};
+use std::net::{SocketAddr};
 use std::io;
 
 use byteorder::{ByteOrder, BigEndian};
