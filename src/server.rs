@@ -91,7 +91,7 @@ impl GearmanRemote {
     }
 }
 
-impl fmt::Debug for GearmanRemote {
+impl fmt::Display for GearmanRemote {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Remote {{ addr: {:?} }}", self.addr)
     }
@@ -144,7 +144,7 @@ impl Handler for GearmanServer {
                             Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
                                                           PollOpt::edge() | PollOpt::oneshot()).unwrap(),
                             Err(e) => {
-                                info!("remote hung up: {:?}", e);
+                                info!("remote({}) hung up: {:?}", &remote, e);
                                 shutdown = true;
                             }
                         }
@@ -168,7 +168,7 @@ impl Handler for GearmanServer {
                             Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
                                                           PollOpt::edge() | PollOpt::oneshot()).unwrap(),
                             Err(e) => {
-                                info!("remote hung up: {}", e);
+                                info!("remote({}) hung up: {}", &remote, e);
                                 shutdown = true;
                             }
                         }
