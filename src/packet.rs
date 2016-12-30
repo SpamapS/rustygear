@@ -338,7 +338,7 @@ impl Packet {
         debug!("self._field_count = {}", self._field_count);
         let handle = self.next_field()?;
         let data = self.next_field()?;
-        info!("Job is complete {:?}", handle);
+        info!("Job is complete {:?}", String::from_utf8(handle.clone()));
         let mut ret = Ok(None);
         match worker.job {
             Some(ref j) => {
