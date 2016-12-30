@@ -1,5 +1,6 @@
 use std::fmt;
 use std::result;
+use std::str;
 
 use mio::tcp::*;
 use mio::deprecated::TryRead;
@@ -9,6 +10,29 @@ use constants::*;
 use job::*;
 use worker::Worker;
 use queues::QueueHolder;
+
+#[test]
+fn next() {
+    let mut data = Box::new(Vec::new());
+    data.extend_from_slice(b"funcname\0data");
+    let mut p = Packet::new_res(WORK_COMPLETE, data);
+    let f = p.next().unwrap();
+    assert_eq!(f, (0, 7));
+    let f2 = p.next().unwrap();
+    assert_eq!(f2, (9, 12));
+}
+
+#[test]
+fn next_field() {
+    let mut data = Box::new(Vec::new());
+    data.extend_from_slice(b"funcname\0data\0\x7f");
+    let mut p = Packet::new_res(WORK_COMPLETE, data);
+    let f = p.next_field().unwrap().into_boxed_slice();
+    let f = str::from_utf8(&f).unwrap();
+    assert_eq!(f, "funcname");
+    let f2 = p.next_field().unwrap().into_boxed_slice();
+    assert_eq!(*f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f' ]);
+}
 
 pub struct PacketType {
     pub name: &'static str,
@@ -44,21 +68,22 @@ impl Iterator for Packet {
         }
         self._field_count += 1;
         debug!("DEBUG: returning field #{}", self._field_count);
-        if self._field_count == nargs {
-            return Some((self._field_byte_count, self.data.len()))
+        if self._field_count > nargs {
+            return Some((self._field_byte_count, self.data.len() - 1))
         };
         let start = self._field_byte_count;
         for byte in &self.data[start..] {
-            self._field_byte_count += 1;
             if *byte == '\0' as u8 {
-                self._field_byte_count -= 1; // Drop the null
+                self._field_byte_count += 1; // Skip the null
                 break
             }
+            self._field_byte_count += 1;
         };
-        Some((start, self._field_byte_count))
+        Some((start, self._field_byte_count - 2)) // And don't return it
     }
 }
 
+#[derive(Debug)]
 pub struct ParseError {}
 
 #[derive(Debug)]
@@ -230,6 +255,7 @@ impl Packet {
             CAN_DO => self.handle_can_do(worker)?,
             CANT_DO => self.handle_cant_do(worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
+            WORK_COMPLETE => self.handle_work_complete(worker)?,
             _ => {
                 debug!("Unimplemented: {:?} processing packet", self);
                 None
@@ -243,10 +269,10 @@ impl Packet {
             None => return Err(ParseError{}),
             Some((start, finish)) => (start, finish),
         };
-        let mut r = Vec::with_capacity(finish - start);
+        let mut r = Vec::with_capacity(finish - start + 1);
         let new_size = r.capacity();
         r.resize(new_size, 0);
-        r.clone_from_slice(&self.data[start..finish]);
+        r.clone_from_slice(&self.data[start..finish + 1]);
         Ok(r)
     }
 
@@ -295,6 +321,33 @@ impl Packet {
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);
         Ok(Some(p))
+    }
+
+    fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        let handle = self.next_field()?;
+        let data = self.next_field()?;
+        info!("Job is complete {:?}", handle);
+        match worker.job {
+            Some(ref j) => {
+                if j.handle != handle {
+                    let msg = "WORK_COMPLETE received for inactive job handle";
+                    let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(msg.len() + 1));
+                    data.push(b'\0');
+                    data.extend_from_slice(msg.as_bytes());
+                    return Ok(Some(Packet::new_res(ERROR, data)))
+                }
+            },
+            None => {
+                let msg = "WORK_COMPLETE received but no active jobs";
+                let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(msg.len() + 1));
+                data.push(b'\0');
+                data.extend_from_slice(msg.as_bytes());
+                return Ok(Some(Packet::new_res(ERROR, data)))
+            }
+        }
+        // TODO: send packet to _client_ if present
+        worker.job = None;
+        Ok(None)
     }
 
     pub fn to_byteslice(&self) -> Box<[u8]> {
