@@ -57,6 +57,8 @@ impl GearmanRemote {
                 self.interest.insert(Ready::writable());
             }
         }
+        // Packet is consumed, reset
+        self.packet = Packet::new(self.token);
         Ok(())
     }
 

@@ -66,6 +66,7 @@ impl Iterator for Packet {
     fn next(&mut self) -> Option<(usize, usize)> {
         let nargs = PTYPES[self.ptype as usize].nargs;
         if self._field_count > nargs {
+            debug!("DEBUG: returning early field #{} nargs={}", self._field_count, nargs);
             return None
         }
         self._field_count += 1;
@@ -126,6 +127,7 @@ impl Packet {
                        worker: &mut Worker,
                        queues: QueueHolder,
                        remote: Token) -> result::Result<Option<Packet>, EofError> {
+        debug!("we are this {:?}", self);
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
@@ -333,6 +335,7 @@ impl Packet {
     }
 
     fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        debug!("self._field_count = {}", self._field_count);
         let handle = self.next_field()?;
         let data = self.next_field()?;
         info!("Job is complete {:?}", handle);
@@ -387,7 +390,7 @@ impl Packet {
 
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?} }}",
+        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?}, fc: {:?}, fb: {:?} }}",
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",
@@ -396,7 +399,7 @@ impl fmt::Debug for Packet {
                },
                PTYPES[self.ptype as usize].name,
                self.psize,
-               self.remote)
+               self.remote, self._field_count, self._field_byte_count)
     }
 }
 
