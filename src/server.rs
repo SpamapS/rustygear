@@ -78,6 +78,16 @@ impl GearmanRemote {
         };
         Ok(())
     }
+
+    pub fn shutdown(self) {
+        match self.worker.job {
+            Some(j) => {
+                self.queues.clone().add_job(j)
+            },
+            None => {},
+        }
+        self.socket.shutdown(Shutdown::Both).unwrap();
+    }
 }
 
 impl GearmanServer {
@@ -89,6 +99,7 @@ impl GearmanServer {
             queues: queues,
         }
     }
+
 }
 
 impl Handler for GearmanServer {
@@ -119,11 +130,20 @@ impl Handler for GearmanServer {
                                         PollOpt::edge() | PollOpt::oneshot()).unwrap();
                 },
                 token => {
-                    let mut remote = self.remotes.get_mut(&token).unwrap();
-                    match remote.read() {
-                        Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
-                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap(),
-                        Err(e) => remote.socket.shutdown(Shutdown::Both).unwrap(),
+                    let mut shutdown = false;
+                    {
+                        let mut remote = self.remotes.get_mut(&token).unwrap();
+                        match remote.read() {
+                            Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
+                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                            Err(e) => {
+                                shutdown = true;
+                            }
+                        }
+                    }
+                    if shutdown {
+                        let remote = self.remotes.remove(&token).unwrap();
+                        remote.shutdown();
                     }
                 },
             }
@@ -133,11 +153,20 @@ impl Handler for GearmanServer {
             match token {
                 SERVER_TOKEN => panic!("Received writable event for server socket."),
                 token => {
-                    let mut remote = self.remotes.get_mut(&token).unwrap();
-                    match remote.write() {
-                        Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
-                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap(),
-                        Err(e) => remote.socket.shutdown(Shutdown::Both).unwrap(),
+                    let mut shutdown = false;
+                    {
+                        let mut remote = self.remotes.get_mut(&token).unwrap();
+                        match remote.write() {
+                            Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
+                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                            Err(e) => {
+                                shutdown = true;
+                            }
+                        }
+                    }
+                    if shutdown {
+                        let remote = self.remotes.remove(&token).unwrap();
+                        remote.shutdown();
                     }
                 },
             }

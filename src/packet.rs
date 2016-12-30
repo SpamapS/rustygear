@@ -264,25 +264,25 @@ impl Packet {
     }
 
     fn handleGrabJobAll(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
-        let j = match queues.get_job(&worker.functions) {
-            None => {
-                return Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))));
-            },
-            Some(j) => {
-                let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
-                data.extend(j.handle);
-                data.push(b'\0');
-                data.extend(j.fname);
-                data.push(b'\0');
-                data.extend(j.unique);
-                data.push(b'\0');
-                // reducer not implemented
-                data.push(b'\0');
-                data.extend(j.data);
-                return Ok(Some(Packet::new_res(JOB_ASSIGN_ALL, data)))
-            },
+        if queues.get_job(worker) {
+            match worker.job {
+                Some(ref j) => {
+                    let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
+                    data.extend(&j.handle);
+                    data.push(b'\0');
+                    data.extend(&j.fname);
+                    data.push(b'\0');
+                    data.extend(&j.unique);
+                    data.push(b'\0');
+                    // reducer not implemented
+                    data.push(b'\0');
+                    data.extend(&j.data);
+                    return Ok(Some(Packet::new_res(JOB_ASSIGN_ALL, data)))
+                },
+                None => {},
+            }
         };
-        Ok(None)
+        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
     fn handleSubmitJob(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {

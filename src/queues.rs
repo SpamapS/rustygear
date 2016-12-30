@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use job::Job;
+use worker::Worker;
 
 type JobQueue = VecDeque<Job>;
 
@@ -29,15 +30,15 @@ impl QueueHolder {
         queues.get_mut(&job.fname).unwrap()[1].push_back(job)
     }
 
-    pub fn get_job(&mut self, funcs: &HashSet<Vec<u8>>) -> Option<Job> {
+    pub fn get_job(&mut self, worker: &mut Worker) -> bool {
         let mut ql = self.queues.clone();
         let mut queues = ql.lock().unwrap();
-        for func in funcs.iter() {
+        for func in worker.functions.iter() {
             debug!("looking for func={:?} in {:?}",
                    func,
                    *queues);
             match queues.get_mut(func) {
-                None => return None,
+                None => return false,
                 Some(prios) => {
                     debug!("found func with {} priority queues", prios.len());
                     let mut i = 0;
@@ -45,12 +46,13 @@ impl QueueHolder {
                         debug!("searching priority {}", i);
                         i = i + 1;
                         if !q.is_empty() {
-                            return q.pop_front();
+                            worker.job = q.pop_front();
+                            return true;
                         }
                     }
                 },
             }
         }
-        None
+        false
     }
 }
