@@ -1,10 +1,8 @@
 use std::fmt;
-use std::io;
 use std::result;
 
 use mio::tcp::*;
 use mio::deprecated::TryRead;
-use mio::*;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use constants::*;
@@ -62,6 +60,8 @@ impl Iterator for Packet {
 }
 
 pub struct ParseError {}
+
+#[derive(Debug)]
 pub struct EofError {}
 
 pub type Result<T> = result::Result<T, ParseError>;
@@ -96,7 +96,7 @@ impl Packet {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
-        let mut psize: u32 = 0;
+        let psize: u32 = 0;
         loop {
             let mut tot_read = 0;
             match socket.try_read(&mut magic_buf) {
@@ -207,8 +207,8 @@ impl Packet {
                         debug!("got all data");
                         {
                             match self.process(queues.clone(), worker) {
-                                Err(e) => {
-                                    error!("An error ocurred");
+                                Err(_) => {
+                                    error!("Packet parsing error");
                                     return Err(EofError {})
                                 },
                                 Ok(pr) => {
@@ -224,12 +224,12 @@ impl Packet {
         Ok(None)
     }
 
-    pub fn process(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+    pub fn process(&mut self, queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handleSubmitJob(queues)?,
-            CAN_DO => self.handleCanDo(worker)?,
-            CANT_DO => self.handleCantDo(worker)?,
-            GRAB_JOB_ALL => self.handleGrabJobAll(queues, worker)?,
+            SUBMIT_JOB => self.handle_submit_job(queues)?,
+            CAN_DO => self.handle_can_do(worker)?,
+            CANT_DO => self.handle_cant_do(worker)?,
+            GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
             _ => {
                 debug!("Unimplemented: {:?} processing packet", self);
                 None
@@ -238,7 +238,7 @@ impl Packet {
         Ok(p)
     }
 
-    fn nextField(&mut self) -> Result<Vec<u8>> {
+    fn next_field(&mut self) -> Result<Vec<u8>> {
         let (start, finish) = match self.next() {
             None => return Err(ParseError{}),
             Some((start, finish)) => (start, finish),
@@ -250,20 +250,20 @@ impl Packet {
         Ok(r)
     }
 
-    fn handleCanDo(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
-        let fname = self.nextField()?;
+    fn handle_can_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        let fname = self.next_field()?;
         debug!("CAN_DO fname = {:?}", fname);
         worker.functions.insert(fname);
         Ok(None)
     }
 
-    fn handleCantDo(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
-        let fname = self.nextField()?;
+    fn handle_cant_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+        let fname = self.next_field()?;
         worker.functions.remove(&fname);
         Ok(None)
     }
 
-    fn handleGrabJobAll(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_grab_job_all(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
         if queues.get_job(worker) {
             match worker.job {
                 Some(ref j) => {
@@ -285,11 +285,11 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handleSubmitJob(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
-        let fname = self.nextField()?;
+    fn handle_submit_job(&mut self, mut queues: QueueHolder) -> Result<Option<Packet>> {
+        let fname = self.next_field()?;
         debug!("fname = {:?}", &fname);
-        let unique = self.nextField()?;
-        let data = self.nextField()?;
+        let unique = self.next_field()?;
+        let data = self.next_field()?;
         let j = Job::new(fname, unique, data);
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
@@ -309,8 +309,8 @@ impl Packet {
             },
         };
         buf.extend(magic.iter());
-        buf.write_u32::<BigEndian>(self.ptype);
-        buf.write_u32::<BigEndian>(self.psize);
+        buf.write_u32::<BigEndian>(self.ptype).unwrap();
+        buf.write_u32::<BigEndian>(self.psize).unwrap();
         buf.extend(self.data.iter());
         buf.into_boxed_slice()
     }

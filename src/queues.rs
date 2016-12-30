@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use job::Job;
 use worker::Worker;
@@ -19,7 +19,7 @@ impl QueueHolder {
     }
 
     pub fn add_job(&mut self, job: Job) {
-        let mut ql = self.queues.clone();
+        let ql = self.queues.clone();
         let mut queues = ql.lock().unwrap();
         if !queues.contains_key(&job.fname) {
             let high_queue = VecDeque::new();
@@ -31,7 +31,7 @@ impl QueueHolder {
     }
 
     pub fn get_job(&mut self, worker: &mut Worker) -> bool {
-        let mut ql = self.queues.clone();
+        let ql = self.queues.clone();
         let mut queues = ql.lock().unwrap();
         for func in worker.functions.iter() {
             debug!("looking for func={:?} in {:?}",

@@ -1,20 +1,20 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::net::{SocketAddr};
 use std::io;
 
-use byteorder::{ByteOrder, BigEndian};
 use mio::deprecated::{EventLoop, Handler, TryWrite};
 use mio::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
 
-use constants::*;
-use packet::{Packet, PacketMagic, PTYPES, EofError};
+use packet::{Packet, EofError};
 use queues::QueueHolder;
 use worker::Worker;
 
 struct GearmanRemote {
     socket: TcpStream,
+    addr: SocketAddr,
     packet: Packet,
     queues: QueueHolder,
     worker: Worker,
@@ -33,9 +33,10 @@ pub struct GearmanServer {
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    pub fn new(socket: TcpStream, queues: QueueHolder) -> GearmanRemote {
+    pub fn new(socket: TcpStream, addr: SocketAddr, queues: QueueHolder) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
+            addr: addr,
             packet: Packet::new(),
             queues: queues,
             worker: Worker::new(),
@@ -90,6 +91,12 @@ impl GearmanRemote {
     }
 }
 
+impl fmt::Debug for GearmanRemote {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Remote {{ addr: {:?} }}", self.addr)
+    }
+}
+
 impl GearmanServer {
     pub fn new(server_socket: TcpListener, queues: QueueHolder) -> GearmanServer {
         GearmanServer {
@@ -112,18 +119,18 @@ impl Handler for GearmanServer {
         if events.is_readable() {
             match token {
                 SERVER_TOKEN => {
-                    let remote_socket = match self.socket.accept() {
+                    let (remote_socket, remote_addr) = match self.socket.accept() {
                         Err(e) => {
                             error!("Accept error: {}", e);
                             return;
                         },
-                        Ok((sock, addr)) => sock,
+                        Ok((sock, addr)) => (sock, addr),
                     };
 
                     self.token_counter += 1;
                     let new_token = Token(self.token_counter);
 
-                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, self.queues.clone()));
+                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, remote_addr, self.queues.clone()));
 
                     event_loop.register(&self.remotes[&new_token].socket,
                                         new_token, Ready::readable(),
@@ -137,6 +144,7 @@ impl Handler for GearmanServer {
                             Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
                                                           PollOpt::edge() | PollOpt::oneshot()).unwrap(),
                             Err(e) => {
+                                info!("remote hung up: {:?}", e);
                                 shutdown = true;
                             }
                         }
@@ -160,6 +168,7 @@ impl Handler for GearmanServer {
                             Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
                                                           PollOpt::edge() | PollOpt::oneshot()).unwrap(),
                             Err(e) => {
+                                info!("remote hung up: {}", e);
                                 shutdown = true;
                             }
                         }

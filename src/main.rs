@@ -5,22 +5,17 @@ extern crate env_logger;
 extern crate mio;
 extern crate uuid;
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use mio::*;
 use mio::deprecated::EventLoop;
 use mio::tcp::*;
 
 pub mod constants;
-use constants::*;
 pub mod job;
-use job::*;
 pub mod packet;
-use packet::*;
 pub mod queues;
 use queues::*;
 pub mod worker;
-use worker::*;
 pub mod server;
 use server::*;
 
@@ -33,7 +28,7 @@ fn main() {
     let server_socket = TcpListener::bind(&address).unwrap();
     let mut event_loop = EventLoop::new().unwrap();
 
-    let mut queues = QueueHolder::new();
+    let queues = QueueHolder::new();
 
     let mut server = GearmanServer::new(server_socket, queues.clone());
 
