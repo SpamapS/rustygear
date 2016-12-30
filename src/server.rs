@@ -183,10 +183,14 @@ impl Handler for GearmanServer {
                             None => {},
                             Some(p) => {
                                 let t = p.remote.unwrap();
-                                let mut remote = self.remotes.get_mut(&t).unwrap(); // XXX
-                                remote.queue_packet(&p);
-                                event_loop.reregister(&remote.socket, t, remote.interest,
-                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                match self.remotes.get_mut(&t) {
+                                    None => warn!("No remote for packet, dropping: {:?}", &p),
+                                    Some(mut remote) => {
+                                        remote.queue_packet(&p);
+                                        event_loop.reregister(&remote.socket, t, remote.interest,
+                                                              PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                    },
+                                }
                             },
                         }
                     }
