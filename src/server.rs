@@ -47,19 +47,24 @@ impl GearmanRemote {
         }
     }
 
-    pub fn read(&mut self) -> Result<(), EofError> {
+    pub fn queue_packet(&mut self, packet: &Packet) {
+        info!("{} Queueing {:?}", self, &packet);
+        self.sendqueue.push(ByteBuf::from_slice(&packet.to_byteslice()));
+        self.interest.remove(Ready::readable());
+        self.interest.insert(Ready::writable());
+    }
+
+    pub fn read(&mut self) -> Result<Option<Packet>, EofError> {
+        let mut ret = Ok(None);
         match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone(), self.token)? {
-            None => debug!("Done reading"),
+            None => debug!("{} Done reading", self),
             Some(p) => {
-                info!("Queueing {:?}", &p);
-                self.sendqueue.push(ByteBuf::from_slice(&p.to_byteslice()));
-                self.interest.remove(Ready::readable());
-                self.interest.insert(Ready::writable());
+                ret = Ok(Some(p));
             }
         }
         // Packet is consumed, reset
         self.packet = Packet::new(self.token);
-        Ok(())
+        ret
     }
 
     pub fn write(&mut self) -> Result<(), io::Error> {
@@ -143,14 +148,46 @@ impl Handler for GearmanServer {
                 token => {
                     let mut shutdown = false;
                     {
-                        let mut remote = self.remotes.get_mut(&token).unwrap();
-                        match remote.read() {
-                            Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
-                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap(),
-                            Err(e) => {
-                                info!("remote({}) hung up: {:?}", &remote, e);
-                                shutdown = true;
+                        let mut other_packet = None;
+                        {
+                            let mut remote = self.remotes.get_mut(&token).unwrap();
+                            match remote.read() {
+                                Ok(sp) => {
+                                    match sp {
+                                        Some(p) => {
+                                            match p.remote {
+                                                None => remote.queue_packet(&p), // Packet is for us
+                                                Some(t) => {
+                                                    if t == token {
+                                                        // Packet is also meant for us
+                                                        remote.queue_packet(&p);
+                                                    } else {
+                                                        // Packet is for a different remote
+                                                        other_packet = Some(p);
+                                                    }
+                                                },
+                                            };
+                                        },
+                                        None => {},
+                                    }
+                                    event_loop.reregister(&remote.socket, token, remote.interest,
+                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                },
+                                Err(e) => {
+                                    info!("remote({}) hung up: {:?}", &remote, e);
+                                    shutdown = true;
+                                }
                             }
+                        }
+                        match other_packet {
+                            None => {},
+                            Some(p) => {
+                                let t = p.remote.unwrap();
+                                let mut remote = self.remotes.get_mut(&t).unwrap(); // XXX
+                                remote.queue_packet(&p);
+                                event_loop.reregister(&remote.socket, t, remote.interest,
+                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                            },
                         }
                     }
                     if shutdown {
