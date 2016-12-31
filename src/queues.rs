@@ -7,21 +7,20 @@ use worker::Worker;
 pub type JobQueue = VecDeque<Job>;
 pub type JobQueues = Arc<Mutex<HashMap<Vec<u8>, [JobQueue; 3]>>>;
 
-#[derive(Clone)]
-pub struct QueueHolder {
-    pub queues: JobQueues,
+
+pub trait HandleJobs {
+    fn new_queues() -> Self;
+    fn add_job(&mut self, job: Job);
+    fn get_job(&mut self, worker: &mut Worker) -> bool;
 }
 
-impl QueueHolder {
-    pub fn new() -> QueueHolder {
-        QueueHolder {
-            queues: Arc::new(Mutex::new(HashMap::new())),
-        }
+impl HandleJobs for JobQueues {
+    fn new_queues() -> JobQueues {
+        Arc::new(Mutex::new(HashMap::new()))
     }
 
-    pub fn add_job(&mut self, job: Job) {
-        let ql = self.queues.clone();
-        let mut queues = ql.lock().unwrap();
+    fn add_job(&mut self, job: Job) {
+        let mut queues = self.lock().unwrap();
         if !queues.contains_key(&job.fname) {
             let high_queue = VecDeque::new();
             let norm_queue = VecDeque::new();
@@ -31,9 +30,8 @@ impl QueueHolder {
         queues.get_mut(&job.fname).unwrap()[1].push_back(job)
     }
 
-    pub fn get_job(&mut self, worker: &mut Worker) -> bool {
-        let ql = self.queues.clone();
-        let mut queues = ql.lock().unwrap();
+    fn get_job(&mut self, worker: &mut Worker) -> bool {
+        let mut queues = self.lock().unwrap();
         for func in worker.functions.iter() {
             debug!("looking for func={:?} in {:?}",
                    func,

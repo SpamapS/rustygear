@@ -12,7 +12,7 @@ use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use constants::*;
 use job::*;
 use worker::Worker;
-use queues::{JobQueues, QueueHolder};
+use queues::*;
 
 #[test]
 fn next() {
@@ -42,9 +42,8 @@ fn admin_command_status() {
     let j = Job::new(vec![b'f'],
                      vec![b'u'],
                      Vec::new());
-    let mut queues = QueueHolder::new();
+    let mut queues = JobQueues::new_queues();
     queues.add_job(j);
-    let queues = queues.queues;
     let t = Token(0);
     let p = Packet::new(t);
     let response = p.admin_command_status(queues);
@@ -54,8 +53,7 @@ fn admin_command_status() {
 
 #[test]
 fn admin_command_status_empty() {
-    let queues = QueueHolder::new();
-    let queues = queues.queues;
+    let queues = JobQueues::new_queues();
     let t = Token(0);
     let p = Packet::new(t);
     let response = p.admin_command_status(queues);
@@ -198,7 +196,7 @@ impl Packet {
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
-                             queues: QueueHolder) -> result::Result<Option<Packet>, EofError> {
+                             queues: JobQueues) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
             match socket.try_read(&mut admin_buf) {
@@ -227,7 +225,7 @@ impl Packet {
         self.consumed = true;
         match data_str.trim() {
             "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
-            "status" => return Ok(Some(self.admin_command_status(queues.queues))),
+            "status" => return Ok(Some(self.admin_command_status(queues))),
             _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
@@ -235,7 +233,7 @@ impl Packet {
     pub fn from_socket(&mut self,
                        socket: &mut TcpStream,
                        worker: &mut Worker,
-                       queues: QueueHolder,
+                       queues: JobQueues,
                        remote: Token) -> result::Result<Option<Packet>, EofError> {
         debug!("we are this {:?}", self);
         let mut magic_buf = [0; 4];
@@ -374,7 +372,7 @@ impl Packet {
         Ok(None)
     }
 
-    pub fn process(&mut self, queues: QueueHolder, worker: &mut Worker, remote: Token) -> Result<Option<Packet>> {
+    pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token) -> Result<Option<Packet>> {
         let p = match self.ptype {
             SUBMIT_JOB => self.handle_submit_job(queues, remote)?,
             CAN_DO => self.handle_can_do(worker)?,
@@ -414,7 +412,7 @@ impl Packet {
         Ok(None)
     }
 
-    fn handle_grab_job_all(&mut self, mut queues: QueueHolder, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_grab_job_all(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
         if queues.get_job(worker) {
             match worker.job {
                 Some(ref j) => {
@@ -436,7 +434,7 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_submit_job(&mut self, mut queues: QueueHolder, remote: Token) -> Result<Option<Packet>> {
+    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Token) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("fname = {:?}", &fname);
         let unique = self.next_field()?;

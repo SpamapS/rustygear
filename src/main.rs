@@ -28,7 +28,7 @@ fn main() {
     let server_socket = TcpListener::bind(&address).unwrap();
     let mut event_loop = EventLoop::new().unwrap();
 
-    let queues = QueueHolder::new();
+    let queues = JobQueues::new_queues();
 
     let mut server = GearmanServer::new(server_socket, queues.clone());
 

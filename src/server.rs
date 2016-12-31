@@ -9,14 +9,14 @@ use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
 
 use packet::{Packet, EofError};
-use queues::QueueHolder;
+use queues::*;
 use worker::Worker;
 
 struct GearmanRemote {
     socket: TcpStream,
     addr: SocketAddr,
     packet: Packet,
-    queues: QueueHolder,
+    queues: JobQueues,
     worker: Worker,
     sendqueue: Vec<ByteBuf>,
     interest: Ready,
@@ -27,14 +27,14 @@ pub struct GearmanServer {
     pub socket: TcpListener,
     remotes: HashMap<Token, GearmanRemote>,
     token_counter: usize,
-    queues: QueueHolder,
+    queues: JobQueues,
 }
 
 
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    pub fn new(socket: TcpStream, addr: SocketAddr, queues: QueueHolder, token: Token) -> GearmanRemote {
+    pub fn new(socket: TcpStream, addr: SocketAddr, queues: JobQueues, token: Token) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
             addr: addr,
@@ -110,7 +110,7 @@ impl fmt::Display for GearmanRemote {
 }
 
 impl GearmanServer {
-    pub fn new(server_socket: TcpListener, queues: QueueHolder) -> GearmanServer {
+    pub fn new(server_socket: TcpListener, queues: JobQueues) -> GearmanServer {
         GearmanServer {
             token_counter: 1,
             remotes: HashMap::new(),
