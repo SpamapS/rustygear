@@ -11,7 +11,7 @@ use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
 use constants::*;
 use job::*;
-use worker::Worker;
+use worker::*;
 use queues::*;
 
 #[test]
@@ -233,6 +233,7 @@ impl Packet {
     pub fn from_socket(&mut self,
                        socket: &mut TcpStream,
                        worker: &mut Worker,
+                       workers: SharedWorkers,
                        queues: JobQueues,
                        remote: Token) -> result::Result<Option<Packet>, EofError> {
         debug!("we are this {:?}", self);
@@ -354,7 +355,7 @@ impl Packet {
                         debug!("got all data");
                         self.consumed = true;
                         {
-                            match self.process(queues.clone(), worker, remote) {
+                            match self.process(queues.clone(), worker, remote, workers) {
                                 Err(_) => {
                                     error!("Packet parsing error");
                                     return Err(EofError {})
@@ -372,10 +373,11 @@ impl Packet {
         Ok(None)
     }
 
-    pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token) -> Result<Option<Packet>> {
+    pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues, remote)?,
-            CAN_DO => self.handle_can_do(worker)?,
+            SUBMIT_JOB => self.handle_submit_job(queues, remote, workers)?,
+            PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
+            CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
             WORK_COMPLETE => self.handle_work_complete(worker)?,
@@ -399,16 +401,22 @@ impl Packet {
         Ok(r)
     }
 
-    fn handle_can_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("CAN_DO fname = {:?}", fname);
         worker.functions.insert(fname);
+        workers.clone().wakeup(worker, remote);
         Ok(None)
     }
 
     fn handle_cant_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         worker.functions.remove(&fname);
+        Ok(None)
+    }
+
+    fn handle_pre_sleep(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
+        workers.clone().sleep(worker, remote);
         Ok(None)
     }
 
@@ -434,16 +442,17 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Token) -> Result<Option<Packet>> {
+    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("fname = {:?}", &fname);
         let unique = self.next_field()?;
         let data = self.next_field()?;
-        let mut j = Job::new(fname, unique, data);
+        let mut j = Job::new(fname.clone(), unique, data);
         j.remotes.push(remote);
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);
+        workers.clone().queue_wake(&fname);
         Ok(Some(p))
     }
 

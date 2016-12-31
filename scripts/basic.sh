@@ -13,6 +13,7 @@ trap cleanup EXIT
 outfile=$(mktemp -t gearman.XXXXXXXX)
 
 strace -f gearman -c 1 -w -f foo sort &
+sleep 1
 gearman -P -f foo > $outfile <<EOF
 a
 c
