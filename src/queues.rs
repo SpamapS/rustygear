@@ -4,11 +4,12 @@ use std::collections::{HashMap, VecDeque};
 use job::Job;
 use worker::Worker;
 
-type JobQueue = VecDeque<Job>;
+pub type JobQueue = VecDeque<Job>;
+pub type JobQueues = Arc<Mutex<HashMap<Vec<u8>, [JobQueue; 3]>>>;
 
 #[derive(Clone)]
 pub struct QueueHolder {
-    pub queues: Arc<Mutex<HashMap<Vec<u8>, [JobQueue; 3]>>>,
+    pub queues: JobQueues,
 }
 
 impl QueueHolder {

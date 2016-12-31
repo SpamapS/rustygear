@@ -12,7 +12,7 @@ use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 use constants::*;
 use job::*;
 use worker::Worker;
-use queues::QueueHolder;
+use queues::{JobQueues, QueueHolder};
 
 #[test]
 fn next() {
@@ -36,6 +36,18 @@ fn next_field() {
     let f2 = p.next_field().unwrap().into_boxed_slice();
     assert_eq!(*f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f' ]);
 }
+
+#[test]
+fn admin_command_status() {
+    let queues = QueueHolder::new();
+    let queues = queues.queues;
+    let t = Token(0);
+    let p = Packet::new(t);
+    let response = p.admin_command_status(queues);
+    let response = str::from_utf8(&response.data).unwrap();
+    assert_eq!(".\n", response);
+}
+
 
 pub struct PacketType {
     pub name: &'static str,
@@ -133,22 +145,40 @@ impl Packet {
         }
     }
 
-    pub fn new_text_res(msg: &str) -> Packet {
+    pub fn new_str_res(msg: &str) -> Packet {
         let mut data = Box::new(Vec::with_capacity(msg.len() + 1)); // For newline
         let msg = String::from_str(msg).unwrap(); // We make all the strings
-        let psize = msg.len() as u32;
         data.extend(msg.into_bytes());
         data.push(b'\n');
+        Packet::new_text_res(data)
+    }
+
+    pub fn new_text_res(data: Box<Vec<u8>>) -> Packet {
         Packet {
             magic: PacketMagic::TEXT,
             ptype: 0,
-            psize: psize,
+            psize: data.len() as u32,
             data: data,
             remote: None,
             consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
         }
+    }
+
+    fn admin_command_status(&self, queues: JobQueues) -> Packet {
+        let mut response = Box::new(Vec::with_capacity(1024*1024)); // XXX Wild guess.
+        let queues = queues.lock().unwrap();
+        for (func, fqueues) in queues.iter() {
+            let mut qtot = 0;
+            for q in fqueues {
+                qtot += q.len();
+            }
+            response.extend(func);
+            response.extend(format!("\t{}\t{}\t{}\n", qtot, 0, 0).into_bytes()); // TODO running/workers
+        }
+        response.extend(b".\n");
+        Packet::new_text_res(response)
     }
 
     pub fn admin_from_socket(&mut self,
@@ -180,8 +210,8 @@ impl Packet {
         }
         self.consumed = true;
         match data_str.trim() {
-            "version" => return Ok(Some(Packet::new_text_res("OK rustygear-version-here"))),
-            _ => return Ok(Some(Packet::new_text_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
+            "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
+            _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
 
