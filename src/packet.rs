@@ -42,21 +42,26 @@ fn admin_command_status() {
     let j = Job::new(vec![b'f'],
                      vec![b'u'],
                      Vec::new());
+    let mut w = Worker::new();
+    w.functions.insert(vec![b'f']);
     let mut queues = JobQueues::new_queues();
+    let mut workers = SharedWorkers::new_workers();
     queues.add_job(j);
+    workers.sleep(&w, Token(1));
     let t = Token(0);
     let p = Packet::new(t);
-    let response = p.admin_command_status(queues);
+    let response = p.admin_command_status(queues, workers);
     let response = str::from_utf8(&response.data).unwrap();
-    assert_eq!("f\t1\t0\t0\n.\n", response);
+    assert_eq!("f\t1\t0\t1\n.\n", response);
 }
 
 #[test]
 fn admin_command_status_empty() {
     let queues = JobQueues::new_queues();
+    let workers = SharedWorkers::new_workers();
     let t = Token(0);
     let p = Packet::new(t);
-    let response = p.admin_command_status(queues);
+    let response = p.admin_command_status(queues, workers);
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!(".\n", response);
 }
@@ -179,7 +184,7 @@ impl Packet {
         }
     }
 
-    fn admin_command_status(&self, queues: JobQueues) -> Packet {
+    fn admin_command_status(&self, queues: JobQueues, workers: SharedWorkers) -> Packet {
         let mut response = Box::new(Vec::with_capacity(1024*1024)); // XXX Wild guess.
         let queues = queues.lock().unwrap();
         for (func, fqueues) in queues.iter() {
@@ -187,8 +192,12 @@ impl Packet {
             for q in fqueues {
                 qtot += q.len();
             }
+            let (active_workers, inactive_workers) = workers.clone().count_workers(func);
             response.extend(func);
-            response.extend(format!("\t{}\t{}\t{}\n", qtot, 0, 0).into_bytes()); // TODO running/workers
+            response.extend(format!("\t{}\t{}\t{}\n",
+                                    qtot,
+                                    active_workers,
+                                    inactive_workers+active_workers).into_bytes());
         }
         response.extend(b".\n");
         Packet::new_text_res(response)
@@ -196,7 +205,8 @@ impl Packet {
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
-                             queues: JobQueues) -> result::Result<Option<Packet>, EofError> {
+                             queues: JobQueues,
+                             workers: SharedWorkers) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
             match socket.try_read(&mut admin_buf) {
@@ -225,7 +235,7 @@ impl Packet {
         self.consumed = true;
         match data_str.trim() {
             "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
-            "status" => return Ok(Some(self.admin_command_status(queues))),
+            "status" => return Ok(Some(self.admin_command_status(queues, workers))),
             _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
@@ -244,7 +254,7 @@ impl Packet {
         let mut tot_read = 0;
         loop {
             if self.magic == PacketMagic::TEXT {
-                return Ok(self.admin_from_socket(socket, queues)?)
+                return Ok(self.admin_from_socket(socket, queues, workers)?)
             }
             match socket.try_read(&mut magic_buf) {
                 Err(e) => {

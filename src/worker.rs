@@ -34,6 +34,7 @@ pub trait Wake {
     fn do_wakes(&mut self) -> Vec<Packet>;
     fn sleep(&mut self, &Worker, Token);
     fn wakeup(&mut self, &Worker, Token);
+    fn count_workers(&mut self, &Vec<u8>) -> (usize, usize);
 }
 
 impl Wake for SharedWorkers {
@@ -79,7 +80,7 @@ impl Wake for SharedWorkers {
             };
             if add {
                 let mut workerset = WorkerSet::new();
-                workerset.active.insert(remote);
+                workerset.inactive.insert(remote);
                 workers.allworkers.insert(fname.clone(), workerset);
             }
         }
@@ -100,9 +101,21 @@ impl Wake for SharedWorkers {
             };
             if add {
                 let mut workerset = WorkerSet::new();
-                workerset.inactive.insert(remote);
+                workerset.active.insert(remote);
                 workers.allworkers.insert(fname.clone(), workerset);
             }
+        }
+    }
+
+    fn count_workers(&mut self, fname: &Vec<u8>) -> (usize, usize) {
+        let workers = self.lock().unwrap();
+        match workers.allworkers.get(fname) {
+            None => {
+                (0, 0)
+            },
+            Some(workerset) => {
+                (workerset.active.len(), workerset.inactive.len())
+            },
         }
     }
 }
