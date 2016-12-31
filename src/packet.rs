@@ -60,7 +60,6 @@ pub struct Packet {
     pub consumed: bool,
     _field_byte_count: usize,
     _field_count: i8,
-    i: u32,
 }
 
 const READ_BUFFER_INIT_CAPACITY: usize = 2048;
@@ -115,7 +114,6 @@ impl Packet {
             consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
-            i: 0,
         }
     }
 
@@ -132,7 +130,6 @@ impl Packet {
             consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
-            i: 0,
         }
     }
 
@@ -151,31 +148,24 @@ impl Packet {
             consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
-            i: 0,
         }
     }
-
-
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
-            if self.i > 10 {
-                panic!("We're done here");
-            }
-            self.i = self.i + 1;
             match socket.try_read(&mut admin_buf) {
                 Err(e) => {
                     error!("Error while reading socket: {:?}", e);
                     return Err(EofError {})
                 },
                 Ok(None) | Ok(Some(0)) => {
-                    debug!("[{}] Admin no more to read", self.i);
+                    debug!("Admin no more to read");
                     break
                 },
                 Ok(Some(l)) => {
-                    debug!("[{}] Read {} for admin command", self.i, l);
+                    debug!("Read {} for admin command", l);
                     self.data.extend(admin_buf[0..l].iter());
                     continue
                 },
