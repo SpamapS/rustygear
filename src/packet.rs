@@ -39,6 +39,21 @@ fn next_field() {
 
 #[test]
 fn admin_command_status() {
+    let j = Job::new(vec![b'f'],
+                     vec![b'u'],
+                     Vec::new());
+    let mut queues = QueueHolder::new();
+    queues.add_job(j);
+    let queues = queues.queues;
+    let t = Token(0);
+    let p = Packet::new(t);
+    let response = p.admin_command_status(queues);
+    let response = str::from_utf8(&response.data).unwrap();
+    assert_eq!("f\t1\t0\t0\n.\n", response);
+}
+
+#[test]
+fn admin_command_status_empty() {
     let queues = QueueHolder::new();
     let queues = queues.queues;
     let t = Token(0);
@@ -182,7 +197,8 @@ impl Packet {
     }
 
     pub fn admin_from_socket(&mut self,
-                             socket: &mut TcpStream) -> result::Result<Option<Packet>, EofError> {
+                             socket: &mut TcpStream,
+                             queues: QueueHolder) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
             match socket.try_read(&mut admin_buf) {
@@ -211,6 +227,7 @@ impl Packet {
         self.consumed = true;
         match data_str.trim() {
             "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
+            "status" => return Ok(Some(self.admin_command_status(queues.queues))),
             _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
@@ -228,7 +245,7 @@ impl Packet {
         let mut tot_read = 0;
         loop {
             if self.magic == PacketMagic::TEXT {
-                return Ok(self.admin_from_socket(socket)?)
+                return Ok(self.admin_from_socket(socket, queues)?)
             }
             match socket.try_read(&mut magic_buf) {
                 Err(e) => {
