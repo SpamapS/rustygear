@@ -389,6 +389,8 @@ impl Packet {
             PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
             CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
+            GRAB_JOB => self.handle_grab_job(queues, worker)?,
+            GRAB_JOB_UNIQ => self.handle_grab_job_uniq(queues, worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
             WORK_COMPLETE => self.handle_work_complete(worker)?,
             _ => {
@@ -428,6 +430,44 @@ impl Packet {
     fn handle_pre_sleep(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
         workers.clone().sleep(worker, remote);
         Ok(None)
+    }
+
+    fn handle_grab_job(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
+        if queues.get_job(worker) {
+            match worker.job {
+                Some(ref j) => {
+                    let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
+                    data.extend(&j.handle);
+                    data.push(b'\0');
+                    data.extend(&j.fname);
+                    data.push(b'\0');
+                    data.extend(&j.data);
+                    return Ok(Some(Packet::new_res(JOB_ASSIGN, data)))
+                },
+                None => {},
+            }
+        };
+        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
+    }
+
+    fn handle_grab_job_uniq(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
+        if queues.get_job(worker) {
+            match worker.job {
+                Some(ref j) => {
+                    let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
+                    data.extend(&j.handle);
+                    data.push(b'\0');
+                    data.extend(&j.fname);
+                    data.push(b'\0');
+                    data.extend(&j.unique);
+                    data.push(b'\0');
+                    data.extend(&j.data);
+                    return Ok(Some(Packet::new_res(JOB_ASSIGN_UNIQ, data)))
+                },
+                None => {},
+            }
+        };
+        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
     fn handle_grab_job_all(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
