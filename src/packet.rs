@@ -1,6 +1,8 @@
+use std::convert::From;
 use std::fmt;
 use std::result;
 use std::str;
+use std::str::{FromStr, Utf8Error};
 
 use mio::Token;
 use mio::tcp::*;
@@ -55,8 +57,10 @@ pub struct Packet {
     pub psize: u32,
     pub data: Box<Vec<u8>>,
     pub remote: Option<Token>,
+    pub consumed: bool,
     _field_byte_count: usize,
     _field_count: i8,
+    i: u32,
 }
 
 const READ_BUFFER_INIT_CAPACITY: usize = 2048;
@@ -92,6 +96,12 @@ pub struct ParseError {}
 #[derive(Debug)]
 pub struct EofError {}
 
+impl From<Utf8Error> for EofError {
+    fn from(_: Utf8Error) -> Self {
+        EofError {}
+    }
+}
+
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
@@ -102,8 +112,10 @@ impl Packet {
             psize: 0,
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
             remote: Some(remote),
+            consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
+            i: 0,
         }
     }
 
@@ -117,8 +129,69 @@ impl Packet {
             psize: data.len() as u32,
             data: data,
             remote: remote,
+            consumed: false,
             _field_byte_count: 0,
             _field_count: 0,
+            i: 0,
+        }
+    }
+
+    pub fn new_text_res(msg: &str) -> Packet {
+        let mut data = Box::new(Vec::with_capacity(msg.len() + 1)); // For newline
+        let msg = String::from_str(msg).unwrap(); // We make all the strings
+        let psize = msg.len() as u32;
+        data.extend(msg.into_bytes());
+        data.push(b'\n');
+        Packet {
+            magic: PacketMagic::TEXT,
+            ptype: 0,
+            psize: psize,
+            data: data,
+            remote: None,
+            consumed: false,
+            _field_byte_count: 0,
+            _field_count: 0,
+            i: 0,
+        }
+    }
+
+
+
+    pub fn admin_from_socket(&mut self,
+                             socket: &mut TcpStream) -> result::Result<Option<Packet>, EofError> {
+        let mut admin_buf = [0; 64];
+        loop {
+            if self.i > 10 {
+                panic!("We're done here");
+            }
+            self.i = self.i + 1;
+            match socket.try_read(&mut admin_buf) {
+                Err(e) => {
+                    error!("Error while reading socket: {:?}", e);
+                    return Err(EofError {})
+                },
+                Ok(None) | Ok(Some(0)) => {
+                    debug!("[{}] Admin no more to read", self.i);
+                    break
+                },
+                Ok(Some(l)) => {
+                    debug!("[{}] Read {} for admin command", self.i, l);
+                    self.data.extend(admin_buf[0..l].iter());
+                    continue
+                },
+            }
+        }
+        let data_copy = self.data.clone().into_boxed_slice();
+        let data_str = str::from_utf8(&data_copy)?;
+        info!("admin command data: {:?}", data_str);
+        if !self.data.contains(&b'\n') {
+            debug!("Admin partial read");
+            return Ok(None)
+        }
+        self.consumed = true;
+        match data_str.trim() {
+            "version" => return Ok(Some(Packet::new_text_res("OK rustygear-version-here"))),
+            _ => return Ok(Some(Packet::new_text_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
 
@@ -132,8 +205,11 @@ impl Packet {
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
         let psize: u32 = 0;
+        let mut tot_read = 0;
         loop {
-            let mut tot_read = 0;
+            if self.magic == PacketMagic::TEXT {
+                return Ok(self.admin_from_socket(socket)?)
+            }
             match socket.try_read(&mut magic_buf) {
                 Err(e) => {
                     error!("Error while reading socket: {:?}", e);
@@ -160,9 +236,10 @@ impl Packet {
                             },
                             // TEXT/ADMIN protocol
                             _ => {
-                                debug!("Possible admin protocol usage");
+                                debug!("admin protocol detected");
                                 self.magic = PacketMagic::TEXT;
-                                return Ok(None)
+                                self.data.extend(magic_buf.iter());
+                                continue;
                             },
                         }
                     };
@@ -240,6 +317,7 @@ impl Packet {
                     debug!("got {} out of {} bytes of data", len, tot_read);
                     if tot_read >= psize as usize {
                         debug!("got all data");
+                        self.consumed = true;
                         {
                             match self.process(queues.clone(), worker, remote) {
                                 Err(_) => {

@@ -56,14 +56,17 @@ impl GearmanRemote {
 
     pub fn read(&mut self) -> Result<Option<Packet>, EofError> {
         let mut ret = Ok(None);
+        info!("{} readable", self);
         match self.packet.from_socket(&mut self.socket, &mut self.worker, self.queues.clone(), self.token)? {
             None => debug!("{} Done reading", self),
             Some(p) => {
                 ret = Ok(Some(p));
             }
         }
-        // Packet is consumed, reset
-        self.packet = Packet::new(self.token);
+        // Non-text packets are consumed, reset
+        if self.packet.consumed {
+            self.packet = Packet::new(self.token);
+        }
         ret
     }
 
