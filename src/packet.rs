@@ -385,7 +385,8 @@ impl Packet {
 
     pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues, remote, workers)?,
+            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers)?,
+            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers)?,
             PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
             CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
@@ -492,13 +493,16 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
+    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Option<Token>, workers: SharedWorkers) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("fname = {:?}", &fname);
         let unique = self.next_field()?;
         let data = self.next_field()?;
         let mut j = Job::new(fname.clone(), unique, data);
-        j.remotes.push(remote);
+        match remote {
+            None => {},
+            Some(remote) => j.remotes.push(remote),
+        }
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j);

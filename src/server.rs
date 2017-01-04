@@ -102,7 +102,10 @@ impl GearmanRemote {
             },
             None => {},
         }
-        self.socket.shutdown(Shutdown::Both).unwrap();
+        match self.socket.shutdown(Shutdown::Both) {
+            Err(e) => warn!("{:?} fail on shutdown ({:?})", self.addr, e),
+            Ok(_) => {},
+        }
     }
 }
 
