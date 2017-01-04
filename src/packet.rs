@@ -43,11 +43,11 @@ fn admin_command_status() {
                      vec![b'u'],
                      Vec::new());
     let mut w = Worker::new();
-    w.functions.insert(vec![b'f']);
+    w.can_do(vec![b'f']);
     let mut queues = JobQueues::new_queues();
     let mut workers = SharedWorkers::new_workers();
     queues.add_job(j);
-    workers.sleep(&w, Token(1));
+    workers.sleep(&mut w, Token(1));
     let t = Token(0);
     let p = Packet::new(t);
     let response = p.admin_command_status(queues, workers);
@@ -416,14 +416,14 @@ impl Packet {
     fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
         debug!("CAN_DO fname = {:?}", fname);
-        worker.functions.insert(fname);
+        worker.can_do(fname);
         workers.clone().wakeup(worker, remote);
         Ok(None)
     }
 
     fn handle_cant_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
         let fname = self.next_field()?;
-        worker.functions.remove(&fname);
+        worker.cant_do(&fname);
         Ok(None)
     }
 

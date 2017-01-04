@@ -32,11 +32,12 @@ impl HandleJobs for JobQueues {
 
     fn get_job(&mut self, worker: &mut Worker) -> bool {
         let mut queues = self.lock().unwrap();
-        for func in worker.functions.iter() {
+        let mut job: Option<Job> = None;
+        for func in worker.iter() {
             debug!("looking for func={:?} in {:?}",
                    func,
                    *queues);
-            match queues.get_mut(func) {
+            match queues.get_mut(&func) {
                 None => return false,
                 Some(prios) => {
                     debug!("found func with {} priority queues", prios.len());
@@ -45,13 +46,19 @@ impl HandleJobs for JobQueues {
                         debug!("searching priority {}", i);
                         i = i + 1;
                         if !q.is_empty() {
-                            worker.job = q.pop_front();
-                            return true;
+                            job = q.pop_front();
+                            break
                         }
                     }
                 },
             }
         }
-        false
+        match job {
+            Some(job) => {
+                worker.job = Some(job);
+                true
+            },
+            None => false,
+        }
     }
 }

@@ -1,4 +1,8 @@
-use std::collections::{HashSet, HashMap};
+extern crate wrappinghashset;
+
+use self::wrappinghashset::{WrappingHashSet, Iter};
+
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use mio::Token;
@@ -7,6 +11,7 @@ use constants::*;
 use packet::*;
 use job::Job;
 
+#[derive(Debug)]
 pub struct WorkerSet {
     inactive: HashSet<Token>,
     active: HashSet<Token>,
@@ -32,8 +37,8 @@ pub trait Wake {
     fn new_workers() -> Self;
     fn queue_wake(&mut self, &Vec<u8>);
     fn do_wakes(&mut self) -> Vec<Packet>;
-    fn sleep(&mut self, &Worker, Token);
-    fn wakeup(&mut self, &Worker, Token);
+    fn sleep(&mut self, &mut Worker, Token);
+    fn wakeup(&mut self, &mut Worker, Token);
     fn count_workers(&mut self, &Vec<u8>) -> (usize, usize);
 }
 
@@ -45,6 +50,7 @@ impl Wake for SharedWorkers {
     fn queue_wake(&mut self, fname: &Vec<u8>) {
         let mut workers = self.lock().unwrap();
         let mut inserts = Vec::new();
+        debug!("allworkers({:?}) = {:?}", fname, workers.allworkers);
         match workers.allworkers.get_mut(fname) {
             None => {},
             Some(workerset) => {
@@ -53,6 +59,7 @@ impl Wake for SharedWorkers {
                 }
             }
         }
+        debug!("Queueing inserts {:?}", inserts);
         workers.wakeworkers.extend(inserts);
     }
 
@@ -65,11 +72,12 @@ impl Wake for SharedWorkers {
         packets
     }
 
-    fn sleep(&mut self, worker: &Worker, remote: Token) {
+    fn sleep(&mut self, worker: &mut Worker, remote: Token) {
+        debug!("Sleeping with fnames = {:?}", worker.functions);
         let mut workers = self.lock().unwrap();
-        for fname in worker.functions.iter() {
+        for fname in worker.iter() {
             let mut add = false;
-            match workers.allworkers.get_mut(fname) {
+            match workers.allworkers.get_mut(&fname) {
                 None => {
                     add = true;
                 },
@@ -86,11 +94,11 @@ impl Wake for SharedWorkers {
         }
     }
 
-    fn wakeup(&mut self, worker: &Worker, remote: Token) {
+    fn wakeup(&mut self, worker: &mut Worker, remote: Token) {
         let mut workers = self.lock().unwrap();
-        for fname in worker.functions.iter() {
+        for fname in worker.iter() {
             let mut add = false;
-            match workers.allworkers.get_mut(fname) {
+            match workers.allworkers.get_mut(&fname) {
                 None => {
                     add = true;
                 },
@@ -130,15 +138,30 @@ impl Workers {
 }
 
 pub struct Worker {
-    pub functions: HashSet<Vec<u8>>,
+    pub functions: WrappingHashSet<Vec<u8>>,
     pub job: Option<Job>,
 }
 
 impl Worker {
     pub fn new() -> Worker {
         Worker {
-            functions: HashSet::new(),
+            functions: WrappingHashSet::new(),
             job: None,
         }
+    }
+
+    pub fn can_do(&mut self, fname: Vec<u8>)
+    {
+        self.functions.insert(fname);
+    }
+
+    pub fn cant_do<'b>(&mut self, fname: &'b Vec<u8>)
+    {
+        self.functions.remove(fname);
+    }
+
+    pub fn iter<'i>(&'i mut self) -> Iter<'i, Vec<u8>>
+    {
+        self.functions.iter()
     }
 }
