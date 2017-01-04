@@ -38,7 +38,7 @@ impl HandleJobs for JobQueues {
                    func,
                    *queues);
             match queues.get_mut(&func) {
-                None => return false,
+                None => {},
                 Some(prios) => {
                     debug!("found func with {} priority queues", prios.len());
                     let mut i = 0;

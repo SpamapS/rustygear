@@ -77,16 +77,20 @@ impl Wake for SharedWorkers {
         let mut workers = self.lock().unwrap();
         for fname in worker.iter() {
             let mut add = false;
+            debug!("Looking for {:?} in workers.allworkers, {:?}", &fname, &workers.allworkers);
             match workers.allworkers.get_mut(&fname) {
                 None => {
+                    debug!("Did not find {:?}", &fname);
                     add = true;
                 },
                 Some(workerset) => {
+                    debug!("Deactivating remote {:?} from fname {:?}", remote, &fname);
                     workerset.active.remove(&remote);
                     workerset.inactive.insert(remote);
                 },
             };
             if add {
+                debug!("Adding new workerset {:?} from fname {:?}", remote, &fname);
                 let mut workerset = WorkerSet::new();
                 workerset.inactive.insert(remote);
                 workers.allworkers.insert(fname.clone(), workerset);
