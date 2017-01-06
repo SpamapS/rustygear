@@ -1,4 +1,6 @@
 use std::fmt;
+use std::collections::HashSet;
+use std::collections::hash_set;
 
 use mio::Token;
 use uuid::{Uuid, UuidVersion};
@@ -8,7 +10,7 @@ pub struct Job {
    pub fname: Vec<u8>,
    pub unique: Vec<u8>,
    pub data: Vec<u8>,
-   pub remotes: Vec<Token>,
+   remotes: HashSet<Token>,
 }
 
 impl Job {
@@ -19,8 +21,17 @@ impl Job {
             fname: fname,
             unique: unique,
             data: data,
-            remotes: Vec::with_capacity(1),
+            remotes: HashSet::with_capacity(1),
         }
+    }
+    pub fn add_remote(&mut self, remote: Token) {
+        self.remotes.insert(remote);
+    }
+    pub fn remove_remote(&mut self, remote: &Token) {
+        self.remotes.remove(remote);
+    }
+    pub fn iter_remotes(&self) -> hash_set::Iter<Token> {
+        self.remotes.iter()
     }
 }
 

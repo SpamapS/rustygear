@@ -581,7 +581,7 @@ impl Packet {
         let mut j = Job::new(fname.clone(), unique, data);
         match remote {
             None => {},
-            Some(remote) => j.remotes.push(remote),
+            Some(remote) => j.add_remote(remote),
         }
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
@@ -597,7 +597,7 @@ impl Packet {
         info!("Job is complete {:?}", String::from_utf8(handle.clone()));
         let mut ret = Ok(None);
         match worker.job {
-            Some(ref j) => {
+            Some(ref mut j) => {
                 if j.handle != handle {
                     let msg = "WORK_COMPLETE received for inactive job handle";
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(msg.len() + 1));
@@ -605,12 +605,13 @@ impl Packet {
                     data.extend_from_slice(msg.as_bytes());
                     return Ok(Some(Packet::new_res(ERROR, data)))
                 }
-                if !j.remotes.is_empty() {
+                for remote in j.iter_remotes() {
                     let mut client_data: Box<Vec<u8>> = Box::new(Vec::with_capacity(handle.len() + 1 + data.len()));
                     client_data.extend(&j.handle);
                     client_data.push(b'\0');
                     client_data.extend(&data);
-                    ret = Ok(Some(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(j.remotes[0]))));
+                    ret = Ok(Some(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(*remote))));
+                    break; // TODO make packet handler return a list of packets to enqueue
                 }
             },
             None => {

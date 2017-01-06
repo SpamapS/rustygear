@@ -97,8 +97,9 @@ impl GearmanRemote {
 
     pub fn shutdown(self) {
         match self.worker.job {
-            Some(j) => {
-                self.queues.clone().add_job(j)
+            Some(mut j) => {
+                j.remove_remote(&self.token);
+                self.queues.clone().add_job(j) // XXX Maybe this should cut in front of the line?
             },
             None => {},
         }
