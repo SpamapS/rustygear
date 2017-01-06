@@ -59,13 +59,14 @@ impl GearmanRemote {
 
     pub fn read(&mut self) -> Result<Option<Packet>, EofError> {
         let mut ret = Ok(None);
-        info!("{} readable", self);
+        debug!("{} readable", self);
         match self.packet.from_socket(&mut self.socket, &mut self.worker, self.workers.clone(), self.queues.clone(), self.token)? {
             None => debug!("{} Done reading", self),
             Some(p) => {
                 ret = Ok(Some(p));
             }
         }
+        info!("{} Processed {:?}", &self, &self.packet);
         // Non-text packets are consumed, reset
         if self.packet.consumed {
             self.packet = Packet::new(self.token);
@@ -186,7 +187,7 @@ impl Handler for GearmanServer {
                                                       PollOpt::edge() | PollOpt::oneshot()).unwrap();
                                 },
                                 Err(e) => {
-                                    info!("remote({}) hung up: {:?}", &remote, e);
+                                    info!("{} hung up: {:?}", &remote, &e);
                                     shutdown = true;
                                 }
                             }
