@@ -1,3 +1,4 @@
+use std::slice;
 use std::convert::From;
 use std::fmt;
 use std::result;
@@ -15,27 +16,80 @@ use worker::*;
 use queues::*;
 
 #[test]
-fn next() {
+fn test_next_binary_data() {
     let mut data = Box::new(Vec::new());
-    data.extend_from_slice(b"funcname\0data");
-    let mut p = Packet::new_res(WORK_COMPLETE, data);
-    let f = p.next().unwrap();
-    assert_eq!(f, (0, 7));
-    let f2 = p.next().unwrap();
-    assert_eq!(f2, (9, 12));
+    data.extend_from_slice(b"handle\0data\0\x7f");
+    let p = Packet::new_res(WORK_COMPLETE, data);
+    let mut i = p.iter();
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "handle");
+    let f2 = i.next().unwrap();
+    assert_eq!(f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f' ]);
 }
 
 #[test]
-fn next_field() {
+fn test_next_empty_end() {
     let mut data = Box::new(Vec::new());
-    data.extend_from_slice(b"funcname\0data\0\x7f");
-    let mut p = Packet::new_res(WORK_COMPLETE, data);
-    let f = p.next_field().unwrap().into_boxed_slice();
-    let f = str::from_utf8(&f).unwrap();
-    assert_eq!(f, "funcname");
-    let f2 = p.next_field().unwrap().into_boxed_slice();
-    assert_eq!(*f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f' ]);
+    data.extend_from_slice(b"handle2\0");
+    let p = Packet::new_res(WORK_COMPLETE, data);
+    let mut i = p.iter();
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "handle2");
+    let f2 = i.next().unwrap();
+    let f2 = str::from_utf8(f2).unwrap();
+    assert_eq!(f2, "");
 }
+
+#[test]
+fn test_next_0nargs() {
+    let mut data = Box::new(Vec::new());
+    data.extend_from_slice(b"funcname");
+    let p = Packet::new_res(CAN_DO, data);
+    let mut i = p.iter();
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "funcname");
+}
+
+#[test]
+fn test_next_2nargs() {
+    let mut data = Box::new(Vec::new());
+    data.extend_from_slice(b"funcname\0unique\0data");
+    let p = Packet::new_res(SUBMIT_JOB, data);
+    let mut i = p.iter();
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "funcname");
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "unique");
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "data");
+}
+
+#[test]
+fn test_next_3nargs() {
+    let mut data = Box::new(Vec::new());
+    data.extend_from_slice(b"handle\0funcname\0unique\0data");
+    let p = Packet::new_res(JOB_ASSIGN_UNIQ, data);
+    let mut i = p.iter();
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "handle");
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "funcname");
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "unique");
+    let f = i.next().unwrap();
+    let f = str::from_utf8(f).unwrap();
+    assert_eq!(f, "data");
+}
+
 
 #[test]
 fn admin_command_status() {
@@ -88,34 +142,67 @@ pub struct Packet {
     pub data: Box<Vec<u8>>,
     pub remote: Option<Token>,
     pub consumed: bool,
-    _field_byte_count: usize,
-    _field_count: i8,
 }
 
 const READ_BUFFER_INIT_CAPACITY: usize = 2048;
 
-impl Iterator for Packet {
-    type Item = (usize, usize);
-    fn next(&mut self) -> Option<(usize, usize)> {
-        let nargs = PTYPES[self.ptype as usize].nargs;
-        if self._field_count > nargs {
-            debug!("DEBUG: returning early field #{} nargs={}", self._field_count, nargs);
+pub struct IterPacket<'a> {
+    packet: &'a Packet,
+    data_iter: slice::Iter<'a, u8>,
+    lastpos: usize,
+    null_adjust: usize,
+    field_count: i8,
+}
+
+impl<'a> Iterator for IterPacket<'a> {
+    type Item = &'a [u8];
+    fn next(&mut self) -> Option<&'a [u8]> {
+        let nargs = PTYPES[self.packet.ptype as usize].nargs;
+        if self.field_count > nargs {
+            debug!("DEBUG: returning early field #{} nargs={}", self.field_count, nargs);
             return None
         }
-        self._field_count += 1;
-        debug!("DEBUG: returning field #{}", self._field_count);
-        if self._field_count > nargs {
-            return Some((self._field_byte_count, self.data.len() - 1))
-        };
-        let start = self._field_byte_count;
-        for byte in &self.data[start..] {
-            if *byte == '\0' as u8 {
-                self._field_byte_count += 1; // Skip the null
-                break
+        self.field_count += 1;
+        debug!("DEBUG: returning field #{}", self.field_count);
+        if self.field_count == nargs + 1 {
+            return Some(&self.packet.data[(self.lastpos)..self.packet.data.len()])
+        }
+
+        let start = self.lastpos;
+        let mut return_end = self.lastpos;
+        {
+            loop {
+                self.lastpos += 1;
+                match self.data_iter.next() {
+                    None => break,
+                    Some(byte) => {
+                        return_end += 1;
+                        if *byte == 0 {
+                            self.null_adjust = 1;
+                            break
+                        }
+                    },
+                }
             }
-            self._field_byte_count += 1;
+        }
+        Some(&self.packet.data[start..return_end - self.null_adjust])
+    }
+}
+
+impl<'a> IterPacket<'a> {
+    /// Convenience method that makes Vecs insetad of slices
+    fn next_field(&mut self) -> Result<Vec<u8>> {
+        let rslice = match self.next() {
+            None => {
+                return Err(ParseError{})
+            },
+            Some(rslice) => rslice,
         };
-        Some((start, self._field_byte_count - 2)) // And don't return it
+        let mut r = Vec::with_capacity(rslice.len());
+        let new_size = r.capacity();
+        r.resize(new_size, 0);
+        r.clone_from_slice(rslice);
+        Ok(r)
     }
 }
 
@@ -142,8 +229,6 @@ impl Packet {
             data: Box::new(Vec::with_capacity(READ_BUFFER_INIT_CAPACITY)),
             remote: Some(remote),
             consumed: false,
-            _field_byte_count: 0,
-            _field_count: 0,
         }
     }
 
@@ -158,8 +243,6 @@ impl Packet {
             data: data,
             remote: remote,
             consumed: false,
-            _field_byte_count: 0,
-            _field_count: 0,
         }
     }
 
@@ -179,8 +262,16 @@ impl Packet {
             data: data,
             remote: None,
             consumed: false,
-            _field_byte_count: 0,
-            _field_count: 0,
+        }
+    }
+
+    pub fn iter<'a>(&'a self) -> IterPacket<'a> {
+        IterPacket {
+            packet: self,
+            data_iter: self.data.iter(),
+            lastpos: 0,
+            null_adjust: 0,
+            field_count: 0,
         }
     }
 
@@ -246,7 +337,6 @@ impl Packet {
                        workers: SharedWorkers,
                        queues: JobQueues,
                        remote: Token) -> result::Result<Option<Packet>, EofError> {
-        debug!("we are this {:?}", self);
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
@@ -314,7 +404,7 @@ impl Packet {
                     if tot_read == 4 {
                         // validate typ
                         self.ptype = BigEndian::read_u32(&typ_buf); 
-                        debug!("We got a {}", PTYPES[self.ptype as usize].name);
+                        debug!("We got a {} from {:?}", &PTYPES[self.ptype as usize].name, &typ_buf);
                     };
                     break
                 }
@@ -362,7 +452,7 @@ impl Packet {
                     tot_read += len;
                     debug!("got {} out of {} bytes of data", len, tot_read);
                     if tot_read >= psize as usize {
-                        debug!("got all data");
+                        debug!("got all data -> {:?}", String::from_utf8_lossy(&self.data));
                         self.consumed = true;
                         {
                             match self.process(queues.clone(), worker, remote, workers) {
@@ -402,20 +492,9 @@ impl Packet {
         Ok(p)
     }
 
-    fn next_field(&mut self) -> Result<Vec<u8>> {
-        let (start, finish) = match self.next() {
-            None => return Err(ParseError{}),
-            Some((start, finish)) => (start, finish),
-        };
-        let mut r = Vec::with_capacity(finish - start + 1);
-        let new_size = r.capacity();
-        r.resize(new_size, 0);
-        r.clone_from_slice(&self.data[start..finish + 1]);
-        Ok(r)
-    }
-
     fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
-        let fname = self.next_field()?;
+        let mut iter = self.iter();
+        let fname = iter.next_field()?;
         debug!("CAN_DO fname = {:?}", fname);
         worker.can_do(fname);
         workers.clone().wakeup(worker, remote);
@@ -423,7 +502,8 @@ impl Packet {
     }
 
     fn handle_cant_do(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
-        let fname = self.next_field()?;
+        let mut iter = self.iter();
+        let fname = iter.next_field()?;
         worker.cant_do(&fname);
         Ok(None)
     }
@@ -494,10 +574,10 @@ impl Packet {
     }
 
     fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Option<Token>, workers: SharedWorkers) -> Result<Option<Packet>> {
-        let fname = self.next_field()?;
-        debug!("fname = {:?}", &fname);
-        let unique = self.next_field()?;
-        let data = self.next_field()?;
+        let mut iter = self.iter();
+        let fname = iter.next_field()?;
+        let unique = iter.next_field()?;
+        let data = iter.next_field()?;
         let mut j = Job::new(fname.clone(), unique, data);
         match remote {
             None => {},
@@ -511,9 +591,9 @@ impl Packet {
     }
 
     fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
-        debug!("self._field_count = {}", self._field_count);
-        let handle = self.next_field()?;
-        let data = self.next_field()?;
+        let mut iter = self.iter();
+        let handle = iter.next_field()?;
+        let data = iter.next_field()?;
         info!("Job is complete {:?}", String::from_utf8(handle.clone()));
         let mut ret = Ok(None);
         match worker.job {
@@ -566,7 +646,7 @@ impl Packet {
 
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?}, fc: {:?}, fb: {:?} }}",
+        write!(f, "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?} }}",
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",
@@ -575,7 +655,7 @@ impl fmt::Debug for Packet {
                },
                PTYPES[self.ptype as usize].name,
                self.psize,
-               self.remote, self._field_count, self._field_byte_count)
+               self.remote)
     }
 }
 

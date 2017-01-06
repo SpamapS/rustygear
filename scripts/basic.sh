@@ -12,7 +12,7 @@ cleanup () {
 trap cleanup EXIT
 outfile=$(mktemp -t gearman.XXXXXXXX)
 
-strace -f gearman -c 1 -w -f foo sort &
+strace -s 255 -e trace=network -f gearman -c 1 -w -f foo sort &
 sleep 1
 gearman -P -f foo > $outfile <<EOF
 a
