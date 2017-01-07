@@ -54,7 +54,10 @@ impl Wake for SharedWorkers {
         match workers.allworkers.get_mut(fname) {
             None => {},
             Some(workerset) => {
-                for worker in workerset.inactive.iter() {
+                // Copy the contents into active
+                workerset.active.extend(workerset.inactive.iter());
+                // Empty the contents into inserts
+                for worker in workerset.inactive.drain() {
                     inserts.push(worker.clone());
                 }
             }
