@@ -40,6 +40,7 @@ pub trait Wake {
     fn sleep(&mut self, &mut Worker, Token);
     fn wakeup(&mut self, &mut Worker, Token);
     fn count_workers(&mut self, &Vec<u8>) -> (usize, usize);
+    fn shutdown(&mut self, remote: &Token);
 }
 
 impl Wake for SharedWorkers {
@@ -131,6 +132,14 @@ impl Wake for SharedWorkers {
             Some(workerset) => {
                 (workerset.active.len(), workerset.inactive.len())
             },
+        }
+    }
+
+    fn shutdown(&mut self, remote: &Token) {
+        let mut workers = self.lock().unwrap();
+        for (_, workerset) in workers.allworkers.iter_mut() {
+            workerset.inactive.remove(&remote);
+            workerset.active.remove(&remote);
         }
     }
 }

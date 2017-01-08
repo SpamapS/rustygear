@@ -96,7 +96,7 @@ impl GearmanRemote {
         Ok(())
     }
 
-    pub fn shutdown(self) {
+    pub fn shutdown(mut self) {
         match self.worker.job {
             Some(mut j) => {
                 j.remove_remote(&self.token);
@@ -104,6 +104,7 @@ impl GearmanRemote {
             },
             None => {},
         }
+        self.workers.shutdown(&self.token);
         match self.socket.shutdown(Shutdown::Both) {
             Err(e) => warn!("{:?} fail on shutdown ({:?})", self.addr, e),
             Ok(_) => {},
