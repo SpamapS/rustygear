@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{SocketAddr};
+use std::time::Duration;
 use std::io;
 
-use mio::deprecated::{EventLoop, Handler, TryWrite};
+use mio::deprecated::TryWrite;
 use mio::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
@@ -128,18 +129,27 @@ impl GearmanServer {
             workers: workers,
         }
     }
-
 }
 
-impl Handler for GearmanServer {
-    type Timeout = usize;
-    type Message = ();
+impl GearmanServer {
+    pub fn poll(&mut self) {
+        let mut poll = Poll::new().unwrap();
+        poll.register(&self.socket,
+                      Token(0),
+                      Ready::readable(),
+                      PollOpt::edge()).unwrap();
+        let mut pevents = Events::with_capacity(1024);
+        loop {
+            poll.poll(&mut pevents, Some(Duration::from_millis(1000))).unwrap();
+            for event in pevents.iter() {
+                self.poll_inner(&mut poll, &event)
+            }
+        }
+    }
 
-    fn ready(&mut self, event_loop: &mut EventLoop<GearmanServer>,
-             token: Token, events: Ready)
-    {
-        if events.is_readable() {
-            match token {
+    fn poll_inner(&mut self, poll: &mut Poll, event: &Event) {
+        if event.kind().is_readable() {
+            match event.token() {
                 SERVER_TOKEN => {
                     let (remote_socket, remote_addr) = match self.socket.accept() {
                         Err(e) => {
@@ -154,9 +164,9 @@ impl Handler for GearmanServer {
 
                     self.remotes.insert(new_token, GearmanRemote::new(remote_socket, remote_addr, self.queues.clone(), new_token, self.workers.clone()));
 
-                    event_loop.register(&self.remotes[&new_token].socket,
-                                        new_token, Ready::readable(),
-                                        PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                    poll.register(&self.remotes[&new_token].socket,
+                                  new_token, Ready::readable(),
+                                  PollOpt::edge() | PollOpt::oneshot()).unwrap();
                 },
                 token => {
                     let mut shutdown = false;
@@ -184,8 +194,8 @@ impl Handler for GearmanServer {
                                         None => {},
                                     }
                                     other_packets.extend(self.workers.do_wakes());
-                                    event_loop.reregister(&remote.socket, token, remote.interest,
-                                                      PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                    poll.reregister(&remote.socket, token, remote.interest,
+                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
                                 },
                                 Err(e) => {
                                     info!("{} hung up: {:?}", &remote, &e);
@@ -199,8 +209,8 @@ impl Handler for GearmanServer {
                                 None => warn!("No remote for packet, dropping: {:?}", &p),
                                 Some(mut remote) => {
                                     remote.queue_packet(&p);
-                                    event_loop.reregister(&remote.socket, t, remote.interest,
-                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                    poll.reregister(&remote.socket, t, remote.interest,
+                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
                                 },
                             }
                         }
@@ -213,16 +223,16 @@ impl Handler for GearmanServer {
             }
         }
 
-        if events.is_writable() {
-            match token {
+        if event.kind().is_writable() {
+            match event.token() {
                 SERVER_TOKEN => panic!("Received writable event for server socket."),
                 token => {
                     let mut shutdown = false;
                     {
                         let mut remote = self.remotes.get_mut(&token).unwrap();
                         match remote.write() {
-                            Ok(_) => event_loop.reregister(&remote.socket, token, remote.interest,
-                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                            Ok(_) => poll.reregister(&remote.socket, token, remote.interest,
+                                                     PollOpt::edge() | PollOpt::oneshot()).unwrap(),
                             Err(e) => {
                                 info!("remote({}) hung up: {}", &remote, e);
                                 shutdown = true;
