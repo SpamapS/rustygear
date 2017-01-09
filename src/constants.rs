@@ -60,6 +60,10 @@ pub const STATUS_RES_UNIQUE:  u32 = 42;
 pub const REQ: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
 pub const RES: [u8;4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
 
+pub const PRIORITY_HIGH: usize   = 0;
+pub const PRIORITY_NORMAL: usize = 1;
+pub const PRIORITY_LOW: usize    = 2;
+
 #[derive(PartialEq)]
 pub enum PacketCode {
     REQ,

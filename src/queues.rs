@@ -7,10 +7,11 @@ use ::worker::Worker;
 pub type JobQueue = VecDeque<Job>;
 pub type JobQueues = Arc<Mutex<HashMap<Vec<u8>, [JobQueue; 3]>>>;
 
+pub type JobQueuePriority = usize;
 
 pub trait HandleJobs {
     fn new_queues() -> Self;
-    fn add_job(&mut self, job: Job);
+    fn add_job(&mut self, job: Job, priority: JobQueuePriority);
     fn get_job(&mut self, worker: &mut Worker) -> bool;
 }
 
@@ -19,7 +20,7 @@ impl HandleJobs for JobQueues {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
-    fn add_job(&mut self, job: Job) {
+    fn add_job(&mut self, job: Job, priority: JobQueuePriority) {
         let mut queues = self.lock().unwrap();
         if !queues.contains_key(&job.fname) {
             let high_queue = VecDeque::new();
@@ -27,7 +28,7 @@ impl HandleJobs for JobQueues {
             let low_queue = VecDeque::new();
             queues.insert(job.fname.clone(), [high_queue, norm_queue, low_queue]);
         }
-        queues.get_mut(&job.fname).unwrap()[1].push_back(job)
+        queues.get_mut(&job.fname).unwrap()[priority].push_back(job)
     }
 
     fn get_job(&mut self, worker: &mut Worker) -> bool {

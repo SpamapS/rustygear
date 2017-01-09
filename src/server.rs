@@ -10,6 +10,7 @@ use mio::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
 
+use ::constants::*;
 use ::packet::{Packet, EofError};
 use ::queues::*;
 use ::worker::*;
@@ -108,7 +109,8 @@ impl GearmanRemote {
         match self.worker.job {
             Some(mut j) => {
                 j.remove_remote(&self.token);
-                self.queues.clone().add_job(j) // XXX Maybe this should cut in front of the line?
+                // XXX We're prioritizing retries, that may not be strictly desirable.
+                self.queues.clone().add_job(j, PRIORITY_NORMAL);
             },
             None => {},
         }

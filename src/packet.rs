@@ -24,7 +24,7 @@ fn admin_command_status() {
     w.can_do(vec![b'f']);
     let mut queues = JobQueues::new_queues();
     let mut workers = SharedWorkers::new_workers();
-    queues.add_job(j);
+    queues.add_job(j, PRIORITY_NORMAL);
     workers.sleep(&mut w, Token(1));
     let t = Token(0);
     let p = Packet::new(t);
@@ -399,8 +399,12 @@ impl Packet {
 
     pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers)?,
-            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers)?,
+            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_NORMAL)?,
+            SUBMIT_JOB_HIGH => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_HIGH)?,
+            SUBMIT_JOB_LOW => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_LOW)?,
+            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers, PRIORITY_NORMAL)?,
+            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(queues, None, workers, PRIORITY_HIGH)?,
+            SUBMIT_JOB_LOW_BG => self.handle_submit_job(queues, None, workers, PRIORITY_LOW)?,
             PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
             CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
@@ -497,7 +501,11 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_submit_job(&mut self, mut queues: JobQueues, remote: Option<Token>, workers: SharedWorkers) -> Result<Option<Packet>> {
+    fn handle_submit_job(&mut self,
+                         mut queues: JobQueues,
+                         remote: Option<Token>,
+                         workers: SharedWorkers,
+                         priority: JobQueuePriority) -> Result<Option<Packet>> {
         let mut iter = self.iter();
         let fname = iter.next_field()?;
         let unique = iter.next_field()?;
@@ -509,7 +517,7 @@ impl Packet {
         }
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
-        queues.add_job(j);
+        queues.add_job(j, priority);
         workers.clone().queue_wake(&fname);
         Ok(Some(p))
     }
