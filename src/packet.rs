@@ -510,7 +510,8 @@ impl Packet {
         let fname = iter.next_field()?;
         let unique = iter.next_field()?;
         let data = iter.next_field()?;
-        let mut j = Job::new(fname.clone(), unique, data);
+        workers.clone().queue_wake(&fname);
+        let mut j = Job::new(fname, unique, data);
         match remote {
             None => {},
             Some(remote) => j.add_remote(remote),
@@ -518,7 +519,6 @@ impl Packet {
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
         queues.add_job(j, priority);
-        workers.clone().queue_wake(&fname);
         Ok(Some(p))
     }
 

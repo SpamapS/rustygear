@@ -13,7 +13,7 @@ trap cleanup EXIT
 outdir=$(mktemp -d -t gearman.rr.XXXXXXXX)
 outfile=$outdir/sorted.txt
 
-strace -e trace=network gearman -w -c 4006 -f foo2 -f foo sort &
+gearman -w -c 4006 -f foo2 -f foo sort &
 sleep 1
 echo make lots of jobs
 set +x
