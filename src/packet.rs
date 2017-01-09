@@ -90,6 +90,19 @@ fn test_next_3nargs() {
     assert_eq!(f, "data");
 }
 
+#[test]
+fn test_packet_debug() {
+    let p = Packet::new_res(NOOP, Box::new(Vec::new()));
+    let f = format!("->{:?}<-", p);
+    assert_eq!("->Packet { magic: \"RES\", ptype: NOOP, size: 0, remote: None }<-", &f);
+}
+
+#[test]
+fn test_packet_debug_unimplemented() {
+    let p = Packet::new_res((PTYPES.len() + 10) as u32, Box::new(Vec::new()));
+    let f = format!("->{:?}<-", p);
+    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__, size: 0, remote: None }<-", &f);
+}
 
 #[test]
 fn admin_command_status() {
@@ -485,7 +498,7 @@ impl Packet {
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
             WORK_COMPLETE => self.handle_work_complete(worker)?,
             _ => {
-                debug!("Unimplemented: {:?} processing packet", self);
+                error!("Unimplemented: {:?} processing packet", self);
                 None
             },
         };
@@ -654,7 +667,10 @@ impl fmt::Debug for Packet {
                    PacketMagic::TEXT => "TEXT",
                    _ => "UNKNOWN",
                },
-               PTYPES[self.ptype as usize].name,
+               match self.ptype {
+                   p @ 0 ... 42 => PTYPES[p as usize].name,
+                   _ => "__UNIMPLEMENTED__",
+               },
                self.psize,
                self.remote)
     }
