@@ -2,9 +2,10 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::{SocketAddr};
 use std::time::Duration;
+use std::io::Write;
+use std::io::ErrorKind::WouldBlock;
 use std::io;
 
-use mio::deprecated::TryWrite;
 use mio::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
@@ -82,11 +83,17 @@ impl GearmanRemote {
                 continue;
             }
             let buf = self.sendqueue.first_mut().unwrap();
-            match self.socket.try_write(buf.bytes())? {
-                None => break,
-                Some(n) => {
-                    buf.advance(n);
+            match self.socket.write(buf.bytes()) {
+                Ok(value) => {
+                    buf.advance(value);
                     continue
+                },
+                Err(err) => {
+                    if let WouldBlock = err.kind() {
+                        break
+                    } else {
+                        return Err(err)
+                    }
                 }
             };
         }
