@@ -10,9 +10,9 @@ use mio::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
 
-use packet::{Packet, EofError};
-use queues::*;
-use worker::*;
+use ::packet::{Packet, EofError};
+use ::queues::*;
+use ::worker::*;
 
 struct GearmanRemote {
     socket: TcpStream,

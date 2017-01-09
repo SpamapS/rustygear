@@ -7,9 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use mio::Token;
 
-use constants::*;
-use packet::*;
-use job::Job;
+use ::constants::*;
+use ::packet::*;
+use ::job::Job;
 
 #[derive(Debug)]
 pub struct WorkerSet {

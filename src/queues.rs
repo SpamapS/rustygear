@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, VecDeque};
 
-use job::Job;
-use worker::Worker;
+use ::job::Job;
+use ::worker::Worker;
 
 pub type JobQueue = VecDeque<Job>;
 pub type JobQueues = Arc<Mutex<HashMap<Vec<u8>, [JobQueue; 3]>>>;

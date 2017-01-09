@@ -10,10 +10,10 @@ use mio::tcp::*;
 use mio::deprecated::TryRead;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
 
-use constants::*;
-use job::*;
-use worker::*;
-use queues::*;
+use ::constants::*;
+use ::job::*;
+use ::worker::*;
+use ::queues::*;
 
 #[test]
 fn test_next_binary_data() {

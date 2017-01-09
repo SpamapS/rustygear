@@ -1,22 +1,15 @@
 #[macro_use] extern crate log;
-extern crate byteorder;
-extern crate bytes;
 extern crate env_logger;
 extern crate mio;
-extern crate uuid;
+
+extern crate rustygear;
 
 use std::net::SocketAddr;
 use mio::tcp::*;
 
-pub mod constants;
-pub mod job;
-pub mod packet;
-pub mod queues;
-use queues::*;
-pub mod worker;
-use worker::*;
-pub mod server;
-use server::*;
+use rustygear::queues::*;
+use rustygear::worker::*;
+use rustygear::server::*;
 
 
 fn main() {
