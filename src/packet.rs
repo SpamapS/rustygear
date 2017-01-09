@@ -125,7 +125,7 @@ impl<'a> IterPacket<'a> {
         let mut r = Vec::with_capacity(rslice.len());
         let new_size = r.capacity();
         r.resize(new_size, 0);
-        r.clone_from_slice(rslice);
+        r.copy_from_slice(rslice);
         Ok(r)
     }
 }
