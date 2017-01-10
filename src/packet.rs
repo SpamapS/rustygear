@@ -113,17 +113,10 @@ impl<'a> Iterator for IterPacket<'a> {
 impl<'a> IterPacket<'a> {
     /// Convenience method that makes Vecs insetad of slices
     fn next_field(&mut self) -> Result<Vec<u8>> {
-        let rslice = match self.next() {
-            None => {
-                return Err(ParseError{})
-            },
-            Some(rslice) => rslice,
-        };
-        let mut r = Vec::with_capacity(rslice.len());
-        let new_size = r.capacity();
-        r.resize(new_size, 0);
-        r.copy_from_slice(rslice);
-        Ok(r)
+        match self.next() {
+            None => Err(ParseError{}),
+            Some(rslice) => Ok(rslice.to_vec()),
+        }
     }
 }
 
