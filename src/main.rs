@@ -5,12 +5,12 @@ extern crate mio;
 extern crate rustygear;
 
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicUsize;
 use mio::tcp::*;
 
 use rustygear::queues::*;
 use rustygear::worker::*;
 use rustygear::server::*;
-
 
 fn main() {
     env_logger::init().unwrap();
@@ -22,9 +22,12 @@ fn main() {
     let queues = JobQueues::new_queues();
     let workers = SharedWorkers::new_workers();
 
+    let job_count = AtomicUsize::new(0);
+
     let mut server = GearmanServer::new(server_socket,
                                         queues.clone(),
-                                        workers.clone());
+                                        workers.clone(),
+                                        job_count);
 
     server.poll();
 }

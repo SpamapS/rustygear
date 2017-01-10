@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use std::collections::hash_set;
 
 use mio::Token;
-use uuid::{Uuid, UuidVersion};
 
 pub struct Job {
    pub handle: Vec<u8>,
@@ -14,10 +13,9 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn new(fname: Vec<u8>, unique: Vec<u8>, data: Vec<u8>) -> Job {
+    pub fn new(fname: Vec<u8>, unique: Vec<u8>, data: Vec<u8>, handle: Vec<u8>) -> Job {
         Job {
-            handle: Uuid::new(UuidVersion::Random).
-                unwrap().hyphenated().to_string().into_bytes(),
+            handle: handle,
             fname: fname,
             unique: unique,
             data: data,

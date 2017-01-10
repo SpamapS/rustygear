@@ -4,6 +4,8 @@ use std::fmt;
 use std::result;
 use std::str;
 use std::str::{FromStr, Utf8Error};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use mio::Token;
 use mio::tcp::*;
@@ -19,7 +21,8 @@ use ::queues::*;
 fn admin_command_status() {
     let j = Job::new(vec![b'f'],
                      vec![b'u'],
-                     Vec::new());
+                     Vec::new(),
+                     vec![b'h']);
     let mut w = Worker::new();
     w.can_do(vec![b'f']);
     let mut queues = JobQueues::new_queues();
@@ -43,7 +46,6 @@ fn admin_command_status_empty() {
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!(".\n", response);
 }
-
 
 pub struct PacketType {
     pub name: &'static str,
@@ -260,7 +262,8 @@ impl Packet {
                        worker: &mut Worker,
                        workers: SharedWorkers,
                        queues: JobQueues,
-                       remote: Token) -> result::Result<Option<Packet>, EofError> {
+                       remote: Token,
+                       job_count: Arc<&AtomicUsize>) -> result::Result<Option<Packet>, EofError> {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
@@ -379,7 +382,7 @@ impl Packet {
                         debug!("got all data -> {:?}", String::from_utf8_lossy(&self.data));
                         self.consumed = true;
                         {
-                            match self.process(queues.clone(), worker, remote, workers) {
+                            match self.process(queues.clone(), worker, remote, workers, job_count) {
                                 Err(_) => {
                                     error!("Packet parsing error");
                                     return Err(EofError {})
@@ -397,14 +400,19 @@ impl Packet {
         Ok(None)
     }
 
-    pub fn process(&mut self, queues: JobQueues, worker: &mut Worker, remote: Token, workers: SharedWorkers) -> Result<Option<Packet>> {
+    pub fn process(&mut self,
+                   queues: JobQueues,
+                   worker: &mut Worker,
+                   remote: Token,
+                   workers: SharedWorkers,
+                   job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_NORMAL)?,
-            SUBMIT_JOB_HIGH => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_HIGH)?,
-            SUBMIT_JOB_LOW => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_LOW)?,
-            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers, PRIORITY_NORMAL)?,
-            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(queues, None, workers, PRIORITY_HIGH)?,
-            SUBMIT_JOB_LOW_BG => self.handle_submit_job(queues, None, workers, PRIORITY_LOW)?,
+            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_NORMAL, job_count)?,
+            SUBMIT_JOB_HIGH => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_HIGH, job_count)?,
+            SUBMIT_JOB_LOW => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_LOW, job_count)?,
+            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers, PRIORITY_NORMAL, job_count)?,
+            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(queues, None, workers, PRIORITY_HIGH, job_count)?,
+            SUBMIT_JOB_LOW_BG => self.handle_submit_job(queues, None, workers, PRIORITY_LOW, job_count)?,
             PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
             CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
@@ -505,13 +513,19 @@ impl Packet {
                          mut queues: JobQueues,
                          remote: Option<Token>,
                          workers: SharedWorkers,
-                         priority: JobQueuePriority) -> Result<Option<Packet>> {
+                         priority: JobQueuePriority,
+                         job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>> {
         let mut iter = self.iter();
         let fname = iter.next_field()?;
         let unique = iter.next_field()?;
         let data = iter.next_field()?;
         workers.clone().queue_wake(&fname);
-        let mut j = Job::new(fname, unique, data);
+        // H:091234567890
+        let mut handle = Vec::with_capacity(12);
+        let job_num = job_count.fetch_add(1, Ordering::Relaxed);
+        debug!("job_num = {}", job_num);
+        handle.extend(format!("H:{:010}", job_num).as_bytes());
+        let mut j = Job::new(fname, unique, data, handle);
         match remote {
             None => {},
             Some(remote) => j.add_remote(remote),

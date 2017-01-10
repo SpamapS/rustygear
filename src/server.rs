@@ -5,6 +5,8 @@ use std::time::Duration;
 use std::io::Write;
 use std::io::ErrorKind::WouldBlock;
 use std::io;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 use mio::*;
 use mio::tcp::*;
@@ -33,6 +35,7 @@ pub struct GearmanServer {
     token_counter: usize,
     queues: JobQueues,
     workers: SharedWorkers,
+    job_count: AtomicUsize,
 }
 
 
@@ -60,10 +63,14 @@ impl GearmanRemote {
         self.interest.insert(Ready::writable());
     }
 
-    pub fn read(&mut self) -> Result<Option<Packet>, EofError> {
+    pub fn read(&mut self, job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>, EofError> {
         let mut ret = Ok(None);
         debug!("{} readable", self);
-        match self.packet.from_socket(&mut self.socket, &mut self.worker, self.workers.clone(), self.queues.clone(), self.token)? {
+        match self.packet.from_socket(&mut self.socket,
+                                      &mut self.worker,
+                                      self.workers.clone(),
+                                      self.queues.clone(),
+                                      self.token, job_count)? {
             None => debug!("{} Done reading", self),
             Some(p) => {
                 ret = Ok(Some(p));
@@ -129,13 +136,17 @@ impl fmt::Display for GearmanRemote {
 }
 
 impl GearmanServer {
-    pub fn new(server_socket: TcpListener, queues: JobQueues, workers: SharedWorkers) -> GearmanServer {
+    pub fn new(server_socket: TcpListener,
+               queues: JobQueues,
+               workers: SharedWorkers,
+               job_count: AtomicUsize) -> GearmanServer {
         GearmanServer {
             token_counter: 1,
             remotes: HashMap::new(),
             socket: server_socket,
             queues: queues,
             workers: workers,
+            job_count: job_count,
         }
     }
 }
@@ -183,7 +194,8 @@ impl GearmanServer {
                         let mut other_packets = Vec::new();
                         {
                             let mut remote = self.remotes.get_mut(&token).unwrap();
-                            match remote.read() {
+                            let job_count = Arc::new(&self.job_count);
+                            match remote.read(job_count) {
                                 Ok(sp) => {
                                     match sp {
                                         Some(p) => {

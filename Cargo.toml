@@ -7,7 +7,6 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 time = "0.1"
 byteorder = "0.3"
 bytes = "*"
-uuid = { version = "*", features = ["v4"] }
 hash_ring = "*"
 log = "*"
 env_logger = "*"
