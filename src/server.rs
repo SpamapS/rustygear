@@ -63,7 +63,7 @@ impl GearmanRemote {
         self.interest.insert(Ready::writable());
     }
 
-    pub fn read(&mut self, job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>, EofError> {
+    pub fn read(&mut self, job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>, EofError> {
         let mut ret = Ok(None);
         debug!("{} readable", self);
         match self.packet.from_socket(&mut self.socket,
@@ -198,19 +198,21 @@ impl GearmanServer {
                             match remote.read(job_count) {
                                 Ok(sp) => {
                                     match sp {
-                                        Some(p) => {
-                                            match p.remote {
-                                                None => remote.queue_packet(&p), // Packet is for us
-                                                Some(t) => {
-                                                    if t == token {
-                                                        // Packet is also meant for us
-                                                        remote.queue_packet(&p);
-                                                    } else {
-                                                        // Packet is for a different remote
-                                                        other_packets.push(p);
-                                                    }
-                                                },
-                                            };
+                                        Some(packets) => {
+                                            for p in packets.into_iter() {
+                                                match p.remote {
+                                                    None => remote.queue_packet(&p), // Packet is for us
+                                                    Some(t) => {
+                                                        if t == token {
+                                                            // Packet is also meant for us
+                                                            remote.queue_packet(&p);
+                                                        } else {
+                                                            // Packet is for a different remote
+                                                            other_packets.push(p);
+                                                        }
+                                                    },
+                                                };
+                                            }
                                         },
                                         None => {},
                                     }

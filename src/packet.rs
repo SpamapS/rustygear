@@ -251,7 +251,7 @@ impl Packet {
                        workers: SharedWorkers,
                        queues: JobQueues,
                        remote: Token,
-                       job_count: Arc<&AtomicUsize>) -> result::Result<Option<Packet>, EofError> {
+                       job_count: Arc<&AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
@@ -259,7 +259,14 @@ impl Packet {
         let mut tot_read = 0;
         loop {
             if self.magic == PacketMagic::TEXT {
-                return Ok(self.admin_from_socket(socket, queues, workers)?)
+                match self.admin_from_socket(socket, queues, workers)? {
+                    None => return Ok(None),
+                    Some(p) => {
+                        let mut packets = Vec::with_capacity(1);
+                        packets.push(p);
+                        return Ok(Some(packets))
+                    }
+                }
             }
             match socket.try_read(&mut magic_buf) {
                 Err(e) => {
@@ -393,7 +400,7 @@ impl Packet {
                    worker: &mut Worker,
                    remote: Token,
                    workers: SharedWorkers,
-                   job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>> {
+                   job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>> {
         let p = match self.ptype {
             SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_NORMAL, job_count)?,
             SUBMIT_JOB_HIGH => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_HIGH, job_count)?,
@@ -407,13 +414,23 @@ impl Packet {
             GRAB_JOB => self.handle_grab_job(queues, worker)?,
             GRAB_JOB_UNIQ => self.handle_grab_job_uniq(queues, worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
-            WORK_COMPLETE => self.handle_work_complete(worker)?,
+            WORK_COMPLETE => {
+                let packets = self.handle_work_complete(worker)?;
+                return Ok(packets)
+            },
             _ => {
                 error!("Unimplemented: {:?} processing packet", self);
                 None
             },
         };
-        Ok(p)
+        match p {
+            None => Ok(None),
+            Some(p) => {
+                let mut packets = Vec::with_capacity(1);
+                packets.push(p);
+                Ok(Some(packets))
+            }
+        }
     }
 
     fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
@@ -524,12 +541,12 @@ impl Packet {
         Ok(Some(p))
     }
 
-    fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Vec<Packet>>> {
         let mut iter = self.iter();
         let handle = iter.next_field()?;
         let data = iter.next_field()?;
         info!("Job is complete {:?}", String::from_utf8(handle.clone()));
-        let mut ret = Ok(None);
+        let ret;
         match worker.job {
             Some(ref mut j) => {
                 if j.handle != handle {
@@ -537,23 +554,29 @@ impl Packet {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(msg.len() + 1));
                     data.push(b'\0');
                     data.extend_from_slice(msg.as_bytes());
-                    return Ok(Some(Packet::new_res(ERROR, data)))
+                    let mut packets = Vec::with_capacity(1);
+                    packets.push(Packet::new_res(ERROR, data));
+                    return Ok(Some(packets))
                 }
+                let mut packets = Vec::with_capacity(j.len_remotes());
+                let client_data_len = handle.len() + 1 + data.len();
                 for remote in j.iter_remotes() {
-                    let mut client_data: Box<Vec<u8>> = Box::new(Vec::with_capacity(handle.len() + 1 + data.len()));
+                    let mut client_data: Box<Vec<u8>> = Box::new(Vec::with_capacity(client_data_len));
                     client_data.extend(&j.handle);
                     client_data.push(b'\0');
                     client_data.extend(&data);
-                    ret = Ok(Some(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(*remote))));
-                    break; // TODO make packet handler return a list of packets to enqueue
+                    packets.push(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(*remote)));
                 }
+                ret = Ok(Some(packets));
             },
             None => {
                 let msg = "WORK_COMPLETE received but no active jobs";
                 let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(msg.len() + 1));
                 data.push(b'\0');
                 data.extend_from_slice(msg.as_bytes());
-                return Ok(Some(Packet::new_res(ERROR, data)))
+                let mut packets = Vec::with_capacity(1);
+                packets.push(Packet::new_res(ERROR, data));
+                return Ok(Some(packets))
             }
         }
         worker.job = None;

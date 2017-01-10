@@ -31,6 +31,9 @@ impl Job {
     pub fn iter_remotes(&self) -> hash_set::Iter<Token> {
         self.remotes.iter()
     }
+    pub fn len_remotes(&self) -> usize {
+        self.remotes.len()
+    }
 }
 
 impl fmt::Debug for Job {
