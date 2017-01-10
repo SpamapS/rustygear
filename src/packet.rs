@@ -1,4 +1,3 @@
-use std::slice;
 use std::convert::From;
 use std::fmt;
 use std::result;
@@ -7,6 +6,7 @@ use std::str::{FromStr, Utf8Error};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use memchr::Memchr;
 use mio::Token;
 use mio::tcp::*;
 use mio::deprecated::TryRead;
@@ -74,7 +74,7 @@ const READ_BUFFER_INIT_CAPACITY: usize = 2048;
 
 pub struct IterPacket<'a> {
     packet: &'a Packet,
-    data_iter: slice::Iter<'a, u8>,
+    data_iter: Memchr<'a>,
     lastpos: usize,
     null_adjust: usize,
     field_count: i8,
@@ -95,23 +95,18 @@ impl<'a> Iterator for IterPacket<'a> {
         }
 
         let start = self.lastpos;
-        let mut return_end = self.lastpos;
-        {
-            loop {
-                self.lastpos += 1;
-                match self.data_iter.next() {
-                    None => break,
-                    Some(byte) => {
-                        return_end += 1;
-                        if *byte == 0 {
-                            self.null_adjust = 1;
-                            break
-                        }
-                    },
-                }
+        match self.data_iter.next() {
+            None => {
+                warn!("No null found where one was expected");
+                self.lastpos = self.packet.data.len();
+                return None
+            },
+            Some(pos) => {
+                self.lastpos = pos;
+                let return_end = pos - 1;
+                return Some(&self.packet.data[start..return_end - self.null_adjust])
             }
         }
-        Some(&self.packet.data[start..return_end - self.null_adjust])
     }
 }
 
@@ -194,7 +189,7 @@ impl Packet {
     pub fn iter<'a>(&'a self) -> IterPacket<'a> {
         IterPacket {
             packet: self,
-            data_iter: self.data.iter(),
+            data_iter: Memchr::new(b'\0', &self.data),
             lastpos: 0,
             null_adjust: 0,
             field_count: 0,
