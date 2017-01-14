@@ -1,11 +1,11 @@
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, VecDeque};
 
 use ::job::Job;
 use ::worker::Worker;
 
-pub type JobQueue = VecDeque<Weak<Job>>;
+pub type JobQueue = VecDeque<Rc<Job>>;
 pub type JobQueues = HashMap<Vec<u8>, [JobQueue; 3]>;
 
 pub struct JobStorage {
@@ -54,7 +54,7 @@ impl HandleJobStorage for SharedJobStorage {
             storage.queues.insert(job.fname.clone(), [high_queue, norm_queue, low_queue]);
         }
         storage.jobs.insert(job.fname.clone(), job.clone());
-        storage.queues.get_mut(&job.fname).unwrap()[priority].push_back(Rc::downgrade(&job));
+        storage.queues.get_mut(&job.fname).unwrap()[priority].push_back(job.clone());
     }
 
     fn get_job(&mut self, worker: &mut Worker) -> bool {
@@ -73,21 +73,8 @@ impl HandleJobStorage for SharedJobStorage {
                         i = i + 1;
                         if !q.is_empty() {
                             debug!("Queue has items! {:?}", q.len());
-                            loop {
-                                match q.pop_front().unwrap().upgrade() { // Unwrap depends on queue!empty
-                                    Some(j) => {
-                                        job = Some(j);
-                                        break
-                                    },
-                                    None => {
-                                        debug!("Perhaps cancelled job.");
-                                    }, // Cancelled job
-                                }
-                            }
-                            match job {
-                                None => {},
-                                Some(_) => break,
-                            }
+                            job = q.pop_front();
+                            break
                         }
                     }
                 },
