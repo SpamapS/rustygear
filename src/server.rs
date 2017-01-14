@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{SocketAddr};
+use std::rc::Rc;
 use std::time::Duration;
 use std::io::Write;
 use std::io::ErrorKind::WouldBlock;
@@ -21,7 +22,7 @@ struct GearmanRemote {
     socket: TcpStream,
     addr: SocketAddr,
     packet: Packet,
-    queues: JobQueues,
+    queues: SharedJobStorage,
     worker: Worker,
     workers: SharedWorkers,
     sendqueue: Vec<ByteBuf>,
@@ -33,7 +34,7 @@ pub struct GearmanServer {
     pub socket: TcpListener,
     remotes: HashMap<Token, GearmanRemote>,
     token_counter: usize,
-    queues: JobQueues,
+    queues: SharedJobStorage,
     workers: SharedWorkers,
     job_count: AtomicUsize,
 }
@@ -42,7 +43,7 @@ pub struct GearmanServer {
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    pub fn new(socket: TcpStream, addr: SocketAddr, queues: JobQueues, token: Token, workers: SharedWorkers) -> GearmanRemote {
+    pub fn new(socket: TcpStream, addr: SocketAddr, queues: SharedJobStorage, token: Token, workers: SharedWorkers) -> GearmanRemote {
         GearmanRemote {
             socket: socket,
             addr: addr,
@@ -113,11 +114,18 @@ impl GearmanRemote {
     }
 
     pub fn shutdown(mut self) {
-        match self.worker.job {
-            Some(mut j) => {
-                j.remove_remote(&self.token);
-                // XXX We're prioritizing retries, that may not be strictly desirable.
-                self.queues.clone().add_job(j, PRIORITY_NORMAL);
+        match self.worker.job() {
+            Some(ref mut j) => {
+                match Rc::get_mut(j) {
+                    None => {
+                        // Minor annoyance, the remote will just produce an error
+                    },
+                    Some(j) => {
+                        j.remove_remote(&self.token);
+                        // XXX We're prioritizing retries, that may not be strictly desirable.
+                    },
+                };
+                self.queues.clone().add_job(j.clone(), PRIORITY_NORMAL);
             },
             None => {},
         }
@@ -137,7 +145,7 @@ impl fmt::Display for GearmanRemote {
 
 impl GearmanServer {
     pub fn new(server_socket: TcpListener,
-               queues: JobQueues,
+               queues: SharedJobStorage,
                workers: SharedWorkers,
                job_count: AtomicUsize) -> GearmanServer {
         GearmanServer {

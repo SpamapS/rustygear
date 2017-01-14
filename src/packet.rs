@@ -1,5 +1,6 @@
 use std::convert::From;
 use std::fmt;
+use std::rc::Rc;
 use std::result;
 use std::str;
 use std::str::{FromStr, Utf8Error};
@@ -25,9 +26,9 @@ fn admin_command_status() {
                      vec![b'h']);
     let mut w = Worker::new();
     w.can_do(vec![b'f']);
-    let mut queues = JobQueues::new_queues();
+    let mut queues = SharedJobStorage::new_job_storage();
     let mut workers = SharedWorkers::new_workers();
-    queues.add_job(j, PRIORITY_NORMAL);
+    queues.add_job(Rc::new(j), PRIORITY_NORMAL);
     workers.sleep(&mut w, Token(1));
     let t = Token(0);
     let p = Packet::new(t);
@@ -38,7 +39,7 @@ fn admin_command_status() {
 
 #[test]
 fn admin_command_status_empty() {
-    let queues = JobQueues::new_queues();
+    let queues = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
     let t = Token(0);
     let p = Packet::new(t);
@@ -189,9 +190,10 @@ impl Packet {
         }
     }
 
-    fn admin_command_status(&self, queues: JobQueues, workers: SharedWorkers) -> Packet {
+    fn admin_command_status(&self, queues: SharedJobStorage, workers: SharedWorkers) -> Packet {
         let mut response = Box::new(Vec::with_capacity(1024*1024)); // XXX Wild guess.
-        let queues = queues.lock().unwrap();
+        let storage = queues.lock().unwrap();
+        let queues = storage.queues();
         for (func, fqueues) in queues.iter() {
             let mut qtot = 0;
             for q in fqueues {
@@ -210,7 +212,7 @@ impl Packet {
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
-                             queues: JobQueues,
+                             queues: SharedJobStorage,
                              workers: SharedWorkers) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
@@ -249,7 +251,7 @@ impl Packet {
                        socket: &mut TcpStream,
                        worker: &mut Worker,
                        workers: SharedWorkers,
-                       queues: JobQueues,
+                       queues: SharedJobStorage,
                        remote: Token,
                        job_count: Arc<&AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
@@ -396,7 +398,7 @@ impl Packet {
     }
 
     pub fn process(&mut self,
-                   queues: JobQueues,
+                   queues: SharedJobStorage,
                    worker: &mut Worker,
                    remote: Token,
                    workers: SharedWorkers,
@@ -415,7 +417,7 @@ impl Packet {
             GRAB_JOB_UNIQ => self.handle_grab_job_uniq(queues, worker)?,
             GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
             WORK_COMPLETE => {
-                let packets = self.handle_work_complete(worker)?;
+                let packets = self.handle_work_complete(worker, queues)?;
                 return Ok(packets)
             },
             _ => {
@@ -454,9 +456,9 @@ impl Packet {
         Ok(None)
     }
 
-    fn handle_grab_job(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_grab_job(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
         if queues.get_job(worker) {
-            match worker.job {
+            match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
                     data.extend(&j.handle);
@@ -472,9 +474,9 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_grab_job_uniq(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_grab_job_uniq(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
         if queues.get_job(worker) {
-            match worker.job {
+            match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
                     data.extend(&j.handle);
@@ -492,9 +494,9 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_grab_job_all(&mut self, mut queues: JobQueues, worker: &mut Worker) -> Result<Option<Packet>> {
+    fn handle_grab_job_all(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
         if queues.get_job(worker) {
-            match worker.job {
+            match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
                     data.extend(&j.handle);
@@ -515,7 +517,7 @@ impl Packet {
     }
 
     fn handle_submit_job(&mut self,
-                         mut queues: JobQueues,
+                         mut queues: SharedJobStorage,
                          remote: Option<Token>,
                          workers: SharedWorkers,
                          priority: JobQueuePriority,
@@ -537,17 +539,17 @@ impl Packet {
         }
         info!("Created job {:?}", j);
         let p = Packet::new_res(JOB_CREATED, Box::new(j.handle.clone()));
-        queues.add_job(j, priority);
+        queues.add_job(Rc::new(j), priority);
         Ok(Some(p))
     }
 
-    fn handle_work_complete(&mut self, worker: &mut Worker) -> Result<Option<Vec<Packet>>> {
+    fn handle_work_complete(&mut self, worker: &mut Worker, mut storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
         let mut iter = self.iter();
         let handle = iter.next_field()?;
         let data = iter.next_field()?;
         info!("Job is complete {:?}", String::from_utf8(handle.clone()));
         let ret;
-        match worker.job {
+        match worker.job() {
             Some(ref mut j) => {
                 if j.handle != handle {
                     let msg = "WORK_COMPLETE received for inactive job handle";
@@ -567,6 +569,7 @@ impl Packet {
                     client_data.extend(&data);
                     packets.push(Packet::new_res_remote(WORK_COMPLETE, client_data, Some(*remote)));
                 }
+                storage.remove_job(&j.unique);
                 ret = Ok(Some(packets));
             },
             None => {
@@ -579,7 +582,7 @@ impl Packet {
                 return Ok(Some(packets))
             }
         }
-        worker.job = None;
+        worker.unassign_job();
         ret
     }
 
