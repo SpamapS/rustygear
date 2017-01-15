@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{SocketAddr};
-use std::rc::Rc;
 use std::time::Duration;
 use std::io::Write;
 use std::io::ErrorKind::WouldBlock;
@@ -86,6 +85,7 @@ impl GearmanRemote {
     }
 
     pub fn write(&mut self) -> Result<(), io::Error> {
+        debug!("{} writable", self);
         while !self.sendqueue.is_empty() {
             if !self.sendqueue.first().unwrap().has_remaining() {
                 self.sendqueue.pop();
@@ -116,19 +116,10 @@ impl GearmanRemote {
     pub fn shutdown(mut self) {
         match self.worker.job() {
             Some(ref mut j) => {
-                match Rc::get_mut(j) {
-                    None => {
-                        // Minor annoyance, the remote will just produce an error
-                    },
-                    Some(j) => {
-                        j.remove_remote(&self.token);
-                        // XXX We're prioritizing retries, that may not be strictly desirable.
-                    },
-                };
-                self.queues.clone().add_job(j.clone(), PRIORITY_NORMAL);
+                self.queues.clone().add_job(j.clone(), PRIORITY_NORMAL, None);
             },
             None => {},
-        }
+        };
         self.workers.shutdown(&self.token);
         match self.socket.shutdown(Shutdown::Both) {
             Err(e) => warn!("{:?} fail on shutdown ({:?})", self.addr, e),
@@ -139,7 +130,7 @@ impl GearmanRemote {
 
 impl fmt::Display for GearmanRemote {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Remote {{ addr: {:?} }}", self.addr)
+        write!(f, "Remote {{ addr: {:?} token: {:?} }}", self.addr, self.token)
     }
 }
 
