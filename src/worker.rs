@@ -3,6 +3,7 @@ extern crate wrappinghashset;
 use self::wrappinghashset::{WrappingHashSet, Iter};
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use mio::Token;
@@ -153,9 +154,10 @@ impl Workers {
     }
 }
 
+#[derive(Debug)]
 pub struct Worker {
     pub functions: WrappingHashSet<Vec<u8>>,
-    pub job: Option<Job>,
+    job: Option<Rc<Job>>,
 }
 
 impl Worker {
@@ -166,18 +168,42 @@ impl Worker {
         }
     }
 
-    pub fn can_do(&mut self, fname: Vec<u8>)
-    {
+    pub fn can_do(&mut self, fname: Vec<u8>) {
         self.functions.insert(fname);
     }
 
-    pub fn cant_do<'b>(&mut self, fname: &'b Vec<u8>)
-    {
+    pub fn cant_do<'b>(&mut self, fname: &'b Vec<u8>) {
         self.functions.remove(fname);
     }
 
-    pub fn iter<'i>(&'i mut self) -> Iter<'i, Vec<u8>>
-    {
+    pub fn iter<'i>(&'i mut self) -> Iter<'i, Vec<u8>> {
         self.functions.iter()
+    }
+
+    pub fn assign_job(&mut self, job: &Rc<Job>) {
+        self.job = Some(job.clone());
+    }
+
+    pub fn unassign_job(&mut self) {
+        match self.job {
+            None => {},
+            Some(ref j) => {
+                match Rc::weak_count(j) {
+                    0 => {},
+                    a @ _ => {
+                        warn!("Unassigning queued {:?} ({}+{} refs)",
+                              j,
+                              Rc::strong_count(j),
+                              a);
+                    }
+                }
+            }
+        }
+        self.job = None;
+    }
+
+
+    pub fn job(&mut self) -> Option<Rc<Job>> {
+        self.job.clone()
     }
 }

@@ -19,7 +19,7 @@ fn main() {
     let address = "0.0.0.0:4730".parse::<SocketAddr>().unwrap();
     let server_socket = TcpListener::bind(&address).unwrap();
 
-    let queues = JobQueues::new_queues();
+    let queues = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
 
     let job_count = AtomicUsize::new(0);
