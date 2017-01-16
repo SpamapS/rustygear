@@ -424,6 +424,7 @@ impl Packet {
                 let packets = self.handle_work_status(storage)?;
                 return Ok(packets)
             },
+            ECHO_REQ => Some(Packet::new_res(ECHO_RES, self.data.clone())),
             _ => {
                 error!("Unimplemented: {:?} processing packet", self);
                 None
