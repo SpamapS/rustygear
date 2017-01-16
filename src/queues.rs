@@ -13,7 +13,8 @@ pub type JobQueues = HashMap<Vec<u8>, [JobQueue; 3]>;
 pub struct JobStorage {
     jobs: HashMap<Vec<u8>, Rc<Job>>, // Owns the job objects forever
     queues: JobQueues,
-    remotes: HashMap<Vec<u8>, HashSet<Token>>,
+    remotes_by_unique: HashMap<Vec<u8>, HashSet<Token>>,
+    remotes_by_handle: HashMap<Vec<u8>, Vec<Token>>,
 }
 
 pub type SharedJobStorage = Arc<Mutex<JobStorage>>;
@@ -36,7 +37,8 @@ impl JobStorage {
         JobStorage {
             jobs: HashMap::with_capacity(INIT_JOB_STORAGE_CAPACITY),
             queues: HashMap::with_capacity(INIT_JOB_FUNCTIONS_CAPACITY),
-            remotes: HashMap::with_capacity(INIT_JOB_STORAGE_CAPACITY),
+            remotes_by_unique: HashMap::with_capacity(INIT_JOB_STORAGE_CAPACITY),
+            remotes_by_handle: HashMap::with_capacity(INIT_JOB_STORAGE_CAPACITY), 
         }
     }
 
@@ -45,12 +47,22 @@ impl JobStorage {
     }
 
     pub fn remove_job(&mut self, unique: &Vec<u8>) {
+        match self.jobs.get(unique) {
+            None => {},
+            Some(job) => {
+                self.remotes_by_handle.remove(&job.handle);
+            }
+        }
         self.jobs.remove(unique);
-        self.remotes.remove(unique);
+        self.remotes_by_unique.remove(unique);
     }
 
     pub fn remotes_by_unique(&self, unique: &Vec<u8>) -> Option<&HashSet<Token>> {
-        self.remotes.get(unique)
+        self.remotes_by_unique.get(unique)
+    }
+
+    pub fn remotes_by_handle(&self, handle: &Vec<u8>) -> Option<&Vec<Token>> {
+        self.remotes_by_handle.get(handle)
     }
 }
 
@@ -65,16 +77,31 @@ impl HandleJobStorage for SharedJobStorage {
             None => return None,
             Some(job) => job.handle.clone(),
         };
-        match storage.remotes.get_mut(unique) {
+        let mut add_remote = false;
+        match storage.remotes_by_unique.get_mut(unique) {
             None => warn!("Job with no remote storage found: {:?}", &handle),
             Some(remotes) => {
                 match remote {
                     None => {},
                     Some(remote) => {
-                        remotes.insert(remote);
+                        add_remote = remotes.insert(remote);
                     },
                 };
             },
+        }
+        // We don't need two hashsets for the same set, so just push if we added to the unique set
+        if add_remote {
+            match storage.remotes_by_handle.get_mut(&handle) {
+                None => warn!("Job with no remote storage found: {:?}", &handle),
+                Some(remotes) => {
+                    match remote {
+                        None => {},
+                        Some(remote) => {
+                            remotes.push(remote);
+                        },
+                    };
+                },
+            }
         }
         Some(handle)
     }
@@ -89,14 +116,17 @@ impl HandleJobStorage for SharedJobStorage {
             storage.queues.insert(job.fname.clone(), [high_queue, norm_queue, low_queue]);
         }
         storage.jobs.insert(job.unique.clone(), job.clone());
+        let mut remotes_by_unique = HashSet::with_capacity(INIT_JOB_REMOTES_CAPACITY);
+        let mut remotes_by_handle = Vec::with_capacity(INIT_JOB_REMOTES_CAPACITY);
         match remote {
             None => {},
             Some(remote) => {
-                let mut remotes = HashSet::with_capacity(INIT_JOB_REMOTES_CAPACITY);
-                remotes.insert(remote);
-                storage.remotes.insert(job.unique.clone(), remotes);
+                remotes_by_unique.insert(remote);
+                remotes_by_handle.push(remote);
             },
         }
+        storage.remotes_by_unique.insert(job.unique.clone(), remotes_by_unique);
+        storage.remotes_by_handle.insert(job.handle.clone(), remotes_by_handle);
         storage.queues.get_mut(&job.fname).unwrap()[priority].push_back(job.clone());
     }
 

@@ -420,6 +420,10 @@ impl Packet {
                 let packets = self.handle_work_complete(worker, storage)?;
                 return Ok(packets)
             },
+            WORK_STATUS => {
+                let packets = self.handle_work_status(storage)?;
+                return Ok(packets)
+            },
             _ => {
                 error!("Unimplemented: {:?} processing packet", self);
                 None
@@ -600,6 +604,26 @@ impl Packet {
         }
         worker.unassign_job();
         ret
+    }
+
+    pub fn handle_work_status(&self, storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
+        let mut iter = self.iter();
+        let handle = iter.next_field()?;
+        // These are unused but we're validating the packet with next_field
+        iter.next_field()?; // numerator -- unused
+        iter.next_field()?; // denominator -- unused
+        let storage = storage.lock().unwrap();
+        match storage.remotes_by_handle(&handle) {
+            None => Ok(None),
+            Some(remotes) => {
+                let mut packets = Vec::with_capacity(remotes.len());
+                for remote in remotes.iter() {
+                    let packet = Packet::new_res_remote(WORK_STATUS, self.data.clone(), Some(remote.clone()));
+                    packets.push(packet);
+                }
+                Ok(Some(packets))
+            },
+        }
     }
 
     pub fn to_byteslice(&self) -> Box<[u8]> {
