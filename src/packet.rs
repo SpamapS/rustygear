@@ -420,12 +420,8 @@ impl Packet {
                 let packets = self.handle_work_complete(worker, storage)?;
                 return Ok(packets)
             },
-            WORK_STATUS => {
-                let packets = self.handle_work_status(storage)?;
-                return Ok(packets)
-            },
-            WORK_DATA => {
-                let packets = self.handle_work_data(storage)?;
+            WORK_STATUS | WORK_DATA | WORK_WARNING => {
+                let packets = self.handle_work_update(storage)?;
                 return Ok(packets)
             },
             ECHO_REQ => Some(Packet::new_res(ECHO_RES, self.data.clone())),
@@ -611,38 +607,22 @@ impl Packet {
         ret
     }
 
-    pub fn handle_work_status(&self, storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
+    /// Several packets, notable WORK_STATUS, WORK_ERROR, and WORK_DATA, all use the same pattern
+    pub fn handle_work_update(&self, storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
         let mut iter = self.iter();
         let handle = iter.next_field()?;
+        let nargs = PTYPES[self.ptype as usize].nargs;
         // These are unused but we're validating the packet with next_field
-        iter.next_field()?; // numerator -- unused
-        iter.next_field()?; // denominator -- unused
-        let storage = storage.lock().unwrap();
-        match storage.remotes_by_handle(&handle) {
-            None => Ok(None),
-            Some(remotes) => {
-                let mut packets = Vec::with_capacity(remotes.len());
-                for remote in remotes.iter() {
-                    let packet = Packet::new_res_remote(WORK_STATUS, self.data.clone(), Some(remote.clone()));
-                    packets.push(packet);
-                }
-                Ok(Some(packets))
-            },
+        for _ in 0..nargs {
+            iter.next_field()?;
         }
-    }
-
-    pub fn handle_work_data(&self, storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
-        let mut iter = self.iter();
-        let handle = iter.next_field()?;
-        // These are unused but we're validating the packet with next_field
-        iter.next_field()?; // data
         let storage = storage.lock().unwrap();
         match storage.remotes_by_handle(&handle) {
             None => Ok(None),
             Some(remotes) => {
                 let mut packets = Vec::with_capacity(remotes.len());
                 for remote in remotes.iter() {
-                    let packet = Packet::new_res_remote(WORK_DATA, self.data.clone(), Some(remote.clone()));
+                    let packet = Packet::new_res_remote(self.ptype, self.data.clone(), Some(remote.clone()));
                     packets.push(packet);
                 }
                 Ok(Some(packets))
