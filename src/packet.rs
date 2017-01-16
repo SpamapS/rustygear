@@ -26,24 +26,24 @@ fn admin_command_status() {
                      vec![b'h']);
     let mut w = Worker::new();
     w.can_do(vec![b'f']);
-    let mut queues = SharedJobStorage::new_job_storage();
+    let mut storage = SharedJobStorage::new_job_storage();
     let mut workers = SharedWorkers::new_workers();
-    queues.add_job(Rc::new(j), PRIORITY_NORMAL, None);
+    storage.add_job(Rc::new(j), PRIORITY_NORMAL, None);
     workers.sleep(&mut w, Token(1));
     let t = Token(0);
     let p = Packet::new(t);
-    let response = p.admin_command_status(queues, workers);
+    let response = p.admin_command_status(storage, workers);
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!("f\t1\t0\t1\n.\n", response);
 }
 
 #[test]
 fn admin_command_status_empty() {
-    let queues = SharedJobStorage::new_job_storage();
+    let storage = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
     let t = Token(0);
     let p = Packet::new(t);
-    let response = p.admin_command_status(queues, workers);
+    let response = p.admin_command_status(storage, workers);
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!(".\n", response);
 }
@@ -190,9 +190,9 @@ impl Packet {
         }
     }
 
-    fn admin_command_status(&self, queues: SharedJobStorage, workers: SharedWorkers) -> Packet {
+    fn admin_command_status(&self, storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
         let mut response = Box::new(Vec::with_capacity(1024*1024)); // XXX Wild guess.
-        let storage = queues.lock().unwrap();
+        let storage = storage.lock().unwrap();
         let queues = storage.queues();
         for (func, fqueues) in queues.iter() {
             let mut qtot = 0;
@@ -212,7 +212,7 @@ impl Packet {
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
-                             queues: SharedJobStorage,
+                             storage: SharedJobStorage,
                              workers: SharedWorkers) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
@@ -242,7 +242,7 @@ impl Packet {
         self.consumed = true;
         match data_str.trim() {
             "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
-            "status" => return Ok(Some(self.admin_command_status(queues, workers))),
+            "status" => return Ok(Some(self.admin_command_status(storage, workers))),
             _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
         }
     }
@@ -251,7 +251,7 @@ impl Packet {
                        socket: &mut TcpStream,
                        worker: &mut Worker,
                        workers: SharedWorkers,
-                       queues: SharedJobStorage,
+                       storage: SharedJobStorage,
                        remote: Token,
                        job_count: Arc<&AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
@@ -261,7 +261,7 @@ impl Packet {
         let mut tot_read = 0;
         loop {
             if self.magic == PacketMagic::TEXT {
-                match self.admin_from_socket(socket, queues, workers)? {
+                match self.admin_from_socket(socket, storage, workers)? {
                     None => return Ok(None),
                     Some(p) => {
                         let mut packets = Vec::with_capacity(1);
@@ -379,7 +379,7 @@ impl Packet {
                         debug!("got all data -> {:?}", String::from_utf8_lossy(&self.data));
                         self.consumed = true;
                         {
-                            match self.process(queues.clone(), worker, remote, workers, job_count) {
+                            match self.process(storage.clone(), worker, remote, workers, job_count) {
                                 Err(_) => {
                                     error!("Packet parsing error");
                                     return Err(EofError {})
@@ -398,26 +398,26 @@ impl Packet {
     }
 
     pub fn process(&mut self,
-                   queues: SharedJobStorage,
+                   storage: SharedJobStorage,
                    worker: &mut Worker,
                    remote: Token,
                    workers: SharedWorkers,
                    job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>> {
         let p = match self.ptype {
-            SUBMIT_JOB => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_NORMAL, job_count)?,
-            SUBMIT_JOB_HIGH => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_HIGH, job_count)?,
-            SUBMIT_JOB_LOW => self.handle_submit_job(queues, Some(remote), workers, PRIORITY_LOW, job_count)?,
-            SUBMIT_JOB_BG => self.handle_submit_job(queues, None, workers, PRIORITY_NORMAL, job_count)?,
-            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(queues, None, workers, PRIORITY_HIGH, job_count)?,
-            SUBMIT_JOB_LOW_BG => self.handle_submit_job(queues, None, workers, PRIORITY_LOW, job_count)?,
+            SUBMIT_JOB => self.handle_submit_job(storage, Some(remote), workers, PRIORITY_NORMAL, job_count)?,
+            SUBMIT_JOB_HIGH => self.handle_submit_job(storage, Some(remote), workers, PRIORITY_HIGH, job_count)?,
+            SUBMIT_JOB_LOW => self.handle_submit_job(storage, Some(remote), workers, PRIORITY_LOW, job_count)?,
+            SUBMIT_JOB_BG => self.handle_submit_job(storage, None, workers, PRIORITY_NORMAL, job_count)?,
+            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(storage, None, workers, PRIORITY_HIGH, job_count)?,
+            SUBMIT_JOB_LOW_BG => self.handle_submit_job(storage, None, workers, PRIORITY_LOW, job_count)?,
             PRE_SLEEP => self.handle_pre_sleep(worker, workers, remote)?,
             CAN_DO => self.handle_can_do(worker, workers, remote)?,
             CANT_DO => self.handle_cant_do(worker)?,
-            GRAB_JOB => self.handle_grab_job(queues, worker)?,
-            GRAB_JOB_UNIQ => self.handle_grab_job_uniq(queues, worker)?,
-            GRAB_JOB_ALL => self.handle_grab_job_all(queues, worker)?,
+            GRAB_JOB => self.handle_grab_job(storage, worker)?,
+            GRAB_JOB_UNIQ => self.handle_grab_job_uniq(storage, worker)?,
+            GRAB_JOB_ALL => self.handle_grab_job_all(storage, worker)?,
             WORK_COMPLETE => {
-                let packets = self.handle_work_complete(worker, queues)?;
+                let packets = self.handle_work_complete(worker, storage)?;
                 return Ok(packets)
             },
             _ => {
@@ -456,8 +456,8 @@ impl Packet {
         Ok(None)
     }
 
-    fn handle_grab_job(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
-        if queues.get_job(worker) {
+    fn handle_grab_job(&mut self, mut storage: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
+        if storage.get_job(worker) {
             match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
@@ -474,8 +474,8 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_grab_job_uniq(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
-        if queues.get_job(worker) {
+    fn handle_grab_job_uniq(&mut self, mut storage: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
+        if storage.get_job(worker) {
             match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
@@ -494,8 +494,8 @@ impl Packet {
         Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
     }
 
-    fn handle_grab_job_all(&mut self, mut queues: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
-        if queues.get_job(worker) {
+    fn handle_grab_job_all(&mut self, mut storage: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
+        if storage.get_job(worker) {
             match worker.job() {
                 Some(ref j) => {
                     let mut data: Box<Vec<u8>> = Box::new(Vec::with_capacity(4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len()));
@@ -517,7 +517,7 @@ impl Packet {
     }
 
     fn handle_submit_job(&mut self,
-                         mut queues: SharedJobStorage,
+                         mut storage: SharedJobStorage,
                          remote: Option<Token>,
                          workers: SharedWorkers,
                          priority: JobQueuePriority,
@@ -527,7 +527,7 @@ impl Packet {
         let unique = iter.next_field()?;
         let data = iter.next_field()?;
         let mut add = false;
-        let handle = match queues.coalesce_unique(&unique, remote) {
+        let handle = match storage.coalesce_unique(&unique, remote) {
             Some(handle) => handle,
             None => {
                 workers.clone().queue_wake(&fname);
@@ -543,7 +543,7 @@ impl Packet {
         if add {
             let job = Rc::new(Job::new(fname, unique, data, handle.clone()));
             info!("Created job {:?}", job);
-            queues.add_job(job.clone(), priority, remote);
+            storage.add_job(job.clone(), priority, remote);
         }
         let p = Packet::new_res(JOB_CREATED, Box::new(handle));
         Ok(Some(p))
