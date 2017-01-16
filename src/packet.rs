@@ -424,6 +424,10 @@ impl Packet {
                 let packets = self.handle_work_status(storage)?;
                 return Ok(packets)
             },
+            WORK_DATA => {
+                let packets = self.handle_work_data(storage)?;
+                return Ok(packets)
+            },
             ECHO_REQ => Some(Packet::new_res(ECHO_RES, self.data.clone())),
             _ => {
                 error!("Unimplemented: {:?} processing packet", self);
@@ -620,6 +624,25 @@ impl Packet {
                 let mut packets = Vec::with_capacity(remotes.len());
                 for remote in remotes.iter() {
                     let packet = Packet::new_res_remote(WORK_STATUS, self.data.clone(), Some(remote.clone()));
+                    packets.push(packet);
+                }
+                Ok(Some(packets))
+            },
+        }
+    }
+
+    pub fn handle_work_data(&self, storage: SharedJobStorage) -> Result<Option<Vec<Packet>>> {
+        let mut iter = self.iter();
+        let handle = iter.next_field()?;
+        // These are unused but we're validating the packet with next_field
+        iter.next_field()?; // data
+        let storage = storage.lock().unwrap();
+        match storage.remotes_by_handle(&handle) {
+            None => Ok(None),
+            Some(remotes) => {
+                let mut packets = Vec::with_capacity(remotes.len());
+                for remote in remotes.iter() {
+                    let packet = Packet::new_res_remote(WORK_DATA, self.data.clone(), Some(remote.clone()));
                     packets.push(packet);
                 }
                 Ok(Some(packets))
