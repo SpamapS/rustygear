@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use memchr::Memchr;
-use mio::Token;
 use mio::tcp::*;
 use mio::deprecated::TryRead;
 use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
@@ -29,8 +28,8 @@ fn admin_command_status() {
     let mut storage = SharedJobStorage::new_job_storage();
     let mut workers = SharedWorkers::new_workers();
     storage.add_job(Rc::new(j), PRIORITY_NORMAL, None);
-    workers.sleep(&mut w, Token(1));
-    let t = Token(0);
+    workers.sleep(&mut w, 1);
+    let t = 0;
     let p = Packet::new(t);
     let response = p.admin_command_status(storage, workers);
     let response = str::from_utf8(&response.data).unwrap();
@@ -41,7 +40,7 @@ fn admin_command_status() {
 fn admin_command_status_empty() {
     let storage = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
-    let t = Token(0);
+    let t = 0;
     let p = Packet::new(t);
     let response = p.admin_command_status(storage, workers);
     let response = str::from_utf8(&response.data).unwrap();
@@ -67,7 +66,7 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
-    pub remote: Option<Token>,
+    pub remote: Option<usize>,
     pub consumed: bool,
 }
 
@@ -136,7 +135,7 @@ impl From<Utf8Error> for EofError {
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
-    pub fn new(remote: Token) -> Packet {
+    pub fn new(remote: usize) -> Packet {
         Packet { 
             magic: PacketMagic::UNKNOWN,
             ptype: 0,
@@ -150,7 +149,7 @@ impl Packet {
     pub fn new_res(ptype: u32, data: Box<Vec<u8>>) -> Packet {
         Packet::new_res_remote(ptype, data, None)
     }
-    pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<Token>) -> Packet {
+    pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<usize>) -> Packet {
         Packet {
             magic: PacketMagic::RES,
             ptype: ptype,
@@ -252,7 +251,7 @@ impl Packet {
                        worker: &mut Worker,
                        workers: SharedWorkers,
                        storage: SharedJobStorage,
-                       remote: Token,
+                       remote: usize,
                        job_count: Arc<&AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
@@ -400,7 +399,7 @@ impl Packet {
     pub fn process(&mut self,
                    storage: SharedJobStorage,
                    worker: &mut Worker,
-                   remote: Token,
+                   remote: usize,
                    workers: SharedWorkers,
                    job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>> {
         let p = match self.ptype {
@@ -440,7 +439,7 @@ impl Packet {
         }
     }
 
-    fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
+    fn handle_can_do(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: usize) -> Result<Option<Packet>> {
         let mut iter = self.iter();
         let fname = iter.next_field()?;
         debug!("CAN_DO fname = {:?}", fname);
@@ -456,7 +455,7 @@ impl Packet {
         Ok(None)
     }
 
-    fn handle_pre_sleep(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: Token) -> Result<Option<Packet>> {
+    fn handle_pre_sleep(&mut self, worker: &mut Worker, workers: SharedWorkers, remote: usize) -> Result<Option<Packet>> {
         workers.clone().sleep(worker, remote);
         Ok(None)
     }
@@ -523,7 +522,7 @@ impl Packet {
 
     fn handle_submit_job(&mut self,
                          mut storage: SharedJobStorage,
-                         remote: Option<Token>,
+                         remote: Option<usize>,
                          workers: SharedWorkers,
                          priority: JobQueuePriority,
                          job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>> {

@@ -3,6 +3,7 @@ extern crate byteorder;
 extern crate bytes;
 extern crate memchr;
 extern crate mio;
+extern crate threadpool;
 pub mod packet;
 pub mod worker;
 pub mod queues;
