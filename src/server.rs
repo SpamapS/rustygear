@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::{SocketAddr};
+use std::ops::Deref;
 use std::time::Duration;
 use std::io::Write;
 use std::io::ErrorKind::WouldBlock;
@@ -37,7 +38,7 @@ pub struct GearmanServer {
     token_counter: usize,
     queues: SharedJobStorage,
     workers: SharedWorkers,
-    job_count: AtomicUsize,
+    job_count: Arc<AtomicUsize>,
 }
 
 const SERVER_TOKEN: Token = Token(0);
@@ -68,7 +69,7 @@ impl GearmanRemote {
         self.interest.insert(Ready::writable());
     }
 
-    pub fn dispatch_read(&mut self, job_count: Arc<&AtomicUsize>,
+    pub fn dispatch_read(&mut self, job_count: Arc<AtomicUsize>,
                          packet_sender: &Sender<Arc<Vec<Packet>>>,
                          poll_sender: &Sender<usize>,
                          shutdown_sender: &Sender<usize>,
@@ -92,18 +93,19 @@ impl GearmanRemote {
                       workers: SharedWorkers,
                       queues: SharedJobStorage,
                       token: usize,
-                      job_count: Arc<&AtomicUsize>,
+                      job_count: Arc<AtomicUsize>,
                       packet_sender: Sender<Arc<Vec<Packet>>>,
                       poll_sender: Sender<usize>,
                       shutdown_sender: Sender<usize>,
-                      packet: Packet,
+                      mut packet: Packet,
                       pool: &ThreadPool) {
         pool.execute(move || {
-            match packet.from_socket(&mut socket.lock().unwrap(),
-                                     &mut worker.lock().unwrap(),
+            match packet.from_socket(socket,
+                                     worker,
                                      workers,
                                      queues,
-                                     token, job_count) {
+                                     token,
+                                     job_count) {
                 Ok(packets) => {
                     match packets {
                         None => debug!("{} Done reading", token),
@@ -122,7 +124,7 @@ impl GearmanRemote {
 
     pub fn write(&mut self) -> Result<(), io::Error> {
         debug!("{} writable", self);
-        let socket = self.socket.lock().unwrap();
+        let mut socket = self.socket.lock().unwrap();
         while !self.sendqueue.is_empty() {
             if !self.sendqueue.first().unwrap().has_remaining() {
                 self.sendqueue.pop();
@@ -179,7 +181,7 @@ impl GearmanServer {
     pub fn new(server_socket: TcpListener,
                queues: SharedJobStorage,
                workers: SharedWorkers,
-               job_count: AtomicUsize) -> GearmanServer {
+               job_count: Arc<AtomicUsize>) -> GearmanServer {
         GearmanServer {
             token_counter: FIRST_FREE_TOKEN,
             remotes: HashMap::new(),
@@ -262,8 +264,8 @@ impl GearmanServer {
 
                     let socket = self.remotes[&new_token].socket.lock().unwrap();
                     {
-                        let socket = *socket;
-                        poll.register(&socket,
+                        let ref socket = *socket;
+                        poll.register(socket,
                                       Token(new_token), Ready::readable(),
                                       PollOpt::edge() | PollOpt::oneshot()).unwrap();
                     }
@@ -276,9 +278,11 @@ impl GearmanServer {
                             return
                         },
                         Ok(packets) => {
+                            // Wake ups get queued in processing
                             send_packets.extend(self.workers.do_wakes());
-                            for p in packets.into_iter() {
-                                send_packets.push(p)
+                            // Now tack these packets onto the end of send_packets
+                            for p in packets.iter() {
+                                send_packets.push(p.clone());
                             }
                         }
                     }
@@ -292,8 +296,8 @@ impl GearmanServer {
                                         remote.queue_packet(&p);
                                         let socket = remote.socket.lock().unwrap();
                                         {
-                                            let socket = *socket;
-                                            poll.reregister(&socket, Token(token), remote.interest,
+                                            let socket = socket.deref();
+                                            poll.reregister(socket, Token(token), remote.interest,
                                                             PollOpt::edge() | PollOpt::oneshot()).unwrap();
                                         }
                                     },
@@ -312,8 +316,8 @@ impl GearmanServer {
                             let mut remote = self.remotes.get_mut(&token).unwrap();
                             let socket = remote.socket.lock().unwrap();
                             {
-                                let socket = *socket;
-                                poll.reregister(&socket, Token(token), remote.interest,
+                                let socket = socket.deref();
+                                poll.reregister(socket, Token(token), remote.interest,
                                                 PollOpt::edge() | PollOpt::oneshot()).unwrap();
                             }
                         },
@@ -326,17 +330,20 @@ impl GearmanServer {
                             return
                         },
                         Ok(token) => {
-                            let mut remote = self.remotes.get_mut(&token).unwrap();
-                            info!("{} hung up", &remote);
-                            remote.shutdown();
+                            match self.remotes.remove(&token) {
+                                None => warn!("No remote for token == {}", token),
+                                Some(remote) => {
+                                    info!("{} hung up", &remote);
+                                    remote.shutdown();
+                                },
+                            }
                         },
                     }
                 },
                 token => {
                     let token = token.0;
                     let mut remote = self.remotes.get_mut(&token).unwrap();
-                    let job_count = Arc::new(&self.job_count);
-                    remote.dispatch_read(job_count, packet_sender, poll_sender, shutdown_sender, pool);
+                    remote.dispatch_read(self.job_count.clone(), packet_sender, poll_sender, shutdown_sender, pool);
                 },
             }
         }
@@ -352,8 +359,8 @@ impl GearmanServer {
                             Ok(_) => {
                                 let socket = remote.socket.lock().unwrap();
                                 {
-                                    let socket = *socket;
-                                    poll.reregister(&socket, token, remote.interest,
+                                    let socket = socket.deref();
+                                    poll.reregister(socket, token, remote.interest,
                                                          PollOpt::edge() | PollOpt::oneshot()).unwrap();
                                 }
                             },

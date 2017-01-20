@@ -3,7 +3,6 @@ extern crate wrappinghashset;
 use self::wrappinghashset::{WrappingHashSet, Iter};
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use ::constants::*;
@@ -155,7 +154,7 @@ impl Workers {
 #[derive(Debug)]
 pub struct Worker {
     pub functions: WrappingHashSet<Vec<u8>>,
-    job: Option<Rc<Job>>,
+    job: Option<Arc<Job>>,
 }
 
 impl Worker {
@@ -178,7 +177,7 @@ impl Worker {
         self.functions.iter()
     }
 
-    pub fn assign_job(&mut self, job: &Rc<Job>) {
+    pub fn assign_job(&mut self, job: &Arc<Job>) {
         self.job = Some(job.clone());
     }
 
@@ -186,12 +185,12 @@ impl Worker {
         match self.job {
             None => {},
             Some(ref j) => {
-                match Rc::weak_count(j) {
+                match Arc::weak_count(j) {
                     0 => {},
                     a @ _ => {
                         warn!("Unassigning queued {:?} ({}+{} refs)",
                               j,
-                              Rc::strong_count(j),
+                              Arc::strong_count(j),
                               a);
                     }
                 }
@@ -201,7 +200,7 @@ impl Worker {
     }
 
 
-    pub fn job(&mut self) -> Option<Rc<Job>> {
+    pub fn job(&self) -> Option<Arc<Job>> {
         self.job.clone()
     }
 }

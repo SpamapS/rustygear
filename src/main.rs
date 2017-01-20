@@ -5,6 +5,7 @@ extern crate mio;
 extern crate rustygear;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use mio::tcp::*;
 
@@ -22,7 +23,7 @@ fn main() {
     let queues = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
 
-    let job_count = AtomicUsize::new(0);
+    let job_count = Arc::new(AtomicUsize::new(0));
 
     let mut server = GearmanServer::new(server_socket,
                                         queues.clone(),

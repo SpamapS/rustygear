@@ -1,11 +1,10 @@
 use std::convert::From;
 use std::fmt;
-use std::rc::Rc;
 use std::result;
 use std::str;
 use std::str::{FromStr, Utf8Error};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use memchr::Memchr;
 use mio::tcp::*;
@@ -27,7 +26,7 @@ fn admin_command_status() {
     w.can_do(vec![b'f']);
     let mut storage = SharedJobStorage::new_job_storage();
     let mut workers = SharedWorkers::new_workers();
-    storage.add_job(Rc::new(j), PRIORITY_NORMAL, None);
+    storage.add_job(Arc::new(j), PRIORITY_NORMAL, None);
     workers.sleep(&mut w, 1);
     let t = 0;
     let p = Packet::new(t);
@@ -53,7 +52,7 @@ pub struct PacketType {
     pub nargs: i8,
 }
 
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum PacketMagic {
     UNKNOWN,
     REQ,
@@ -61,6 +60,7 @@ pub enum PacketMagic {
     TEXT,
 }
 
+#[derive(Clone)]
 pub struct Packet {
     pub magic: PacketMagic,
     pub ptype: u32,
@@ -146,9 +146,6 @@ impl Packet {
         }
     }
 
-    pub fn new_res(ptype: u32, data: Box<Vec<u8>>) -> Packet {
-        Packet::new_res_remote(ptype, data, None)
-    }
     pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<usize>) -> Packet {
         Packet {
             magic: PacketMagic::RES,
@@ -247,20 +244,21 @@ impl Packet {
     }
 
     pub fn from_socket(&mut self,
-                       socket: &mut TcpStream,
-                       worker: &mut Worker,
+                       socket: Arc<Mutex<TcpStream>>,
+                       worker: Arc<Mutex<Worker>>,
                        workers: SharedWorkers,
                        storage: SharedJobStorage,
                        remote: usize,
-                       job_count: Arc<&AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
+                       job_count: Arc<AtomicUsize>) -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
         let mut typ_buf = [0; 4];
         let mut size_buf = [0; 4];
         let psize: u32 = 0;
         let mut tot_read = 0;
+        let mut socket = socket.lock().unwrap();
         loop {
             if self.magic == PacketMagic::TEXT {
-                match self.admin_from_socket(socket, storage, workers)? {
+                match self.admin_from_socket(&mut socket, storage, workers)? {
                     None => return Ok(None),
                     Some(p) => {
                         let mut packets = Vec::with_capacity(1);
@@ -378,6 +376,7 @@ impl Packet {
                         debug!("got all data -> {:?}", String::from_utf8_lossy(&self.data));
                         self.consumed = true;
                         {
+                            let ref mut worker = worker.lock().unwrap();
                             match self.process(storage.clone(), worker, remote, workers, job_count) {
                                 Err(_) => {
                                     error!("Packet parsing error");
@@ -401,7 +400,7 @@ impl Packet {
                    worker: &mut Worker,
                    remote: usize,
                    workers: SharedWorkers,
-                   job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>> {
+                   job_count: Arc<AtomicUsize>) -> Result<Option<Vec<Packet>>> {
         let p = match self.ptype {
             SUBMIT_JOB => self.handle_submit_job(storage, Some(remote), workers, PRIORITY_NORMAL, job_count)?,
             SUBMIT_JOB_HIGH => self.handle_submit_job(storage, Some(remote), workers, PRIORITY_HIGH, job_count)?,
@@ -423,7 +422,7 @@ impl Packet {
                 let packets = self.handle_work_update(storage)?;
                 return Ok(packets)
             },
-            ECHO_REQ => Some(Packet::new_res(ECHO_RES, self.data.clone())),
+            ECHO_REQ => Some(Packet::new_res_remote(ECHO_RES, self.data.clone(), Some(remote))),
             _ => {
                 error!("Unimplemented: {:?} processing packet", self);
                 None
@@ -470,12 +469,12 @@ impl Packet {
                     data.extend(&j.fname);
                     data.push(b'\0');
                     data.extend(&j.data);
-                    return Ok(Some(Packet::new_res(JOB_ASSIGN, data)))
+                    return Ok(Some(Packet::new_res_remote(JOB_ASSIGN, data, self.remote)))
                 },
                 None => {},
             }
         };
-        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
+        Ok(Some(Packet::new_res_remote(NO_JOB, Box::new(Vec::new()), self.remote)))
     }
 
     fn handle_grab_job_uniq(&mut self, mut storage: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
@@ -490,12 +489,12 @@ impl Packet {
                     data.extend(&j.unique);
                     data.push(b'\0');
                     data.extend(&j.data);
-                    return Ok(Some(Packet::new_res(JOB_ASSIGN_UNIQ, data)))
+                    return Ok(Some(Packet::new_res_remote(JOB_ASSIGN_UNIQ, data, self.remote)))
                 },
                 None => {},
             }
         };
-        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
+        Ok(Some(Packet::new_res_remote(NO_JOB, Box::new(Vec::new()), self.remote)))
     }
 
     fn handle_grab_job_all(&mut self, mut storage: SharedJobStorage, worker: &mut Worker) -> Result<Option<Packet>> {
@@ -512,12 +511,12 @@ impl Packet {
                     // reducer not implemented
                     data.push(b'\0');
                     data.extend(&j.data);
-                    return Ok(Some(Packet::new_res(JOB_ASSIGN_ALL, data)))
+                    return Ok(Some(Packet::new_res_remote(JOB_ASSIGN_ALL, data, self.remote)))
                 },
                 None => {},
             }
         };
-        Ok(Some(Packet::new_res(NO_JOB, Box::new(Vec::new()))))
+        Ok(Some(Packet::new_res_remote(NO_JOB, Box::new(Vec::new()), self.remote)))
     }
 
     fn handle_submit_job(&mut self,
@@ -525,7 +524,7 @@ impl Packet {
                          remote: Option<usize>,
                          workers: SharedWorkers,
                          priority: JobQueuePriority,
-                         job_count: Arc<&AtomicUsize>) -> Result<Option<Packet>> {
+                         job_count: Arc<AtomicUsize>) -> Result<Option<Packet>> {
         let mut iter = self.iter();
         let fname = iter.next_field()?;
         let unique = iter.next_field()?;
@@ -545,11 +544,11 @@ impl Packet {
             },
         };
         if add {
-            let job = Rc::new(Job::new(fname, unique, data, handle.clone()));
+            let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
             info!("Created job {:?}", job);
             storage.add_job(job.clone(), priority, remote);
         }
-        let p = Packet::new_res(JOB_CREATED, Box::new(handle));
+        let p = Packet::new_res_remote(JOB_CREATED, Box::new(handle), self.remote);
         Ok(Some(p))
     }
 
@@ -567,7 +566,7 @@ impl Packet {
                     data.push(b'\0');
                     data.extend_from_slice(msg.as_bytes());
                     let mut packets = Vec::with_capacity(1);
-                    packets.push(Packet::new_res(ERROR, data));
+                    packets.push(Packet::new_res_remote(ERROR, data, self.remote));
                     return Ok(Some(packets))
                 }
                 {
@@ -598,7 +597,7 @@ impl Packet {
                 data.push(b'\0');
                 data.extend_from_slice(msg.as_bytes());
                 let mut packets = Vec::with_capacity(1);
-                packets.push(Packet::new_res(ERROR, data));
+                packets.push(Packet::new_res_remote(ERROR, data, self.remote));
                 return Ok(Some(packets))
             }
         }

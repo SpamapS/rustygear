@@ -1,15 +1,14 @@
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use ::job::Job;
 use ::worker::Worker;
 
-pub type JobQueue = VecDeque<Rc<Job>>;
+pub type JobQueue = VecDeque<Arc<Job>>;
 pub type JobQueues = HashMap<Vec<u8>, [JobQueue; 3]>;
 
 pub struct JobStorage {
-    jobs: HashMap<Vec<u8>, Rc<Job>>, // Owns the job objects forever
+    jobs: HashMap<Vec<u8>, Arc<Job>>, // Owns the job objects forever
     queues: JobQueues,
     remotes_by_unique: HashMap<Vec<u8>, HashSet<usize>>,
     remotes_by_handle: HashMap<Vec<u8>, Vec<usize>>,
@@ -20,7 +19,7 @@ pub type SharedJobStorage = Arc<Mutex<JobStorage>>;
 pub trait HandleJobStorage {
     fn new_job_storage() -> SharedJobStorage;
     fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<usize>) -> Option<Vec<u8>>;
-    fn add_job(&mut self, job: Rc<Job>, priority: JobQueuePriority, remote: Option<usize>);
+    fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>);
     fn get_job(&mut self, worker: &mut Worker) -> bool;
 }
 
@@ -105,7 +104,7 @@ impl HandleJobStorage for SharedJobStorage {
     }
 
 
-    fn add_job(&mut self, job: Rc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
+    fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
         let mut storage = self.lock().unwrap();
         if !storage.queues.contains_key(&job.fname) {
             let high_queue = VecDeque::new();
@@ -130,7 +129,7 @@ impl HandleJobStorage for SharedJobStorage {
 
     fn get_job(&mut self, worker: &mut Worker) -> bool {
         let mut storage = self.lock().unwrap();
-        let mut job: Option<Rc<Job>> = None;
+        let mut job: Option<Arc<Job>> = None;
         debug!("{:?}", &worker);
         for func in worker.iter() {
             debug!("func = {:?}", &func);
