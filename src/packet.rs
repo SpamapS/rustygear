@@ -30,7 +30,7 @@ fn admin_command_status() {
     workers.sleep(&mut w, 1);
     let t = 0;
     let p = Packet::new(t);
-    let response = p.admin_command_status(storage, workers);
+    let response = p.admin_command_status(storage, workers, t);
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!("f\t1\t0\t1\n.\n", response);
 }
@@ -41,7 +41,7 @@ fn admin_command_status_empty() {
     let workers = SharedWorkers::new_workers();
     let t = 0;
     let p = Packet::new(t);
-    let response = p.admin_command_status(storage, workers);
+    let response = p.admin_command_status(storage, workers, t);
     let response = str::from_utf8(&response.data).unwrap();
     assert_eq!(".\n", response);
 }
@@ -157,21 +157,21 @@ impl Packet {
         }
     }
 
-    pub fn new_str_res(msg: &str) -> Packet {
+    pub fn new_str_res(msg: &str, remote: usize) -> Packet {
         let mut data = Box::new(Vec::with_capacity(msg.len() + 1)); // For newline
         let msg = String::from_str(msg).unwrap(); // We make all the strings
         data.extend(msg.into_bytes());
         data.push(b'\n');
-        Packet::new_text_res(data)
+        Packet::new_text_res(data, remote)
     }
 
-    pub fn new_text_res(data: Box<Vec<u8>>) -> Packet {
+    pub fn new_text_res(data: Box<Vec<u8>>, remote: usize) -> Packet {
         Packet {
             magic: PacketMagic::TEXT,
             ptype: 0,
             psize: data.len() as u32,
             data: data,
-            remote: None,
+            remote: Some(remote),
             consumed: false,
         }
     }
@@ -186,7 +186,7 @@ impl Packet {
         }
     }
 
-    fn admin_command_status(&self, storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
+    fn admin_command_status(&self, storage: SharedJobStorage, workers: SharedWorkers, remote: usize) -> Packet {
         let mut response = Box::new(Vec::with_capacity(1024*1024)); // XXX Wild guess.
         let storage = storage.lock().unwrap();
         let queues = storage.queues();
@@ -203,13 +203,14 @@ impl Packet {
                                     inactive_workers+active_workers).into_bytes());
         }
         response.extend(b".\n");
-        Packet::new_text_res(response)
+        Packet::new_text_res(response, remote)
     }
 
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
                              storage: SharedJobStorage,
-                             workers: SharedWorkers) -> result::Result<Option<Packet>, EofError> {
+                             workers: SharedWorkers,
+                             remote: usize) -> result::Result<Option<Packet>, EofError> {
         let mut admin_buf = [0; 64];
         loop {
             match socket.try_read(&mut admin_buf) {
@@ -237,9 +238,9 @@ impl Packet {
         }
         self.consumed = true;
         match data_str.trim() {
-            "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here"))),
-            "status" => return Ok(Some(self.admin_command_status(storage, workers))),
-            _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command"))),
+            "version" => return Ok(Some(Packet::new_str_res("OK rustygear-version-here", remote))),
+            "status" => return Ok(Some(self.admin_command_status(storage, workers, remote))),
+            _ => return Ok(Some(Packet::new_str_res("ERR UNKNOWN_COMMAND Unknown+server+command", remote))),
         }
     }
 
@@ -258,7 +259,7 @@ impl Packet {
         let mut socket = socket.lock().unwrap();
         loop {
             if self.magic == PacketMagic::TEXT {
-                match self.admin_from_socket(&mut socket, storage, workers)? {
+                match self.admin_from_socket(&mut socket, storage, workers, remote)? {
                     None => return Ok(None),
                     Some(p) => {
                         let mut packets = Vec::with_capacity(1);
@@ -572,7 +573,9 @@ impl Packet {
                 {
                     // We need to keep it locked while we iterate so no new threads can join this
                     // already complete job
+                    debug!("Locking storage");
                     let mut storage = storage.lock().unwrap();
+                    debug!("Locked storage");
                     match storage.remotes_by_unique(&j.unique) {
                         None => {},
                         Some(remotes) => {
@@ -589,6 +592,7 @@ impl Packet {
                         }
                     }
                     storage.remove_job(&j.unique);
+                    debug!("Unlocking storage");
                 }
             },
             None => {

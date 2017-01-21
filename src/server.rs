@@ -110,13 +110,13 @@ impl GearmanRemote {
                     match packets {
                         None => debug!("{} Done reading", token),
                         Some(packets) => {
-                            packet_sender.send(Arc::new(packets));
+                            packet_sender.send(Arc::new(packets)).unwrap();
                         }
                     }
-                    poll_sender.send(token);
+                    poll_sender.send(token).unwrap();
                 },
                 Err(e) => {
-                    shutdown_sender.send(token);
+                    shutdown_sender.send(token).unwrap();
                 }
             }
         });
@@ -193,8 +193,7 @@ impl GearmanServer {
     }
 }
 
-const N_WORKERS: usize = 4;
-const N_JOBS: usize = 2;
+const N_WORKERS: usize = 8;
 
 impl GearmanServer {
     pub fn poll(&mut self) {
@@ -271,6 +270,7 @@ impl GearmanServer {
                     }
                 },
                 PACKETS_TOKEN => {
+                    debug!("Packets arriving on channel");
                     let mut send_packets = Vec::new();
                     match packet_receiver.try_recv() {
                         Err(e) => {
@@ -307,6 +307,7 @@ impl GearmanServer {
                     }
                 }
                 POLL_TOKEN => {
+                    debug!("Poll token arriving on channel");
                     match poll_receiver.try_recv() {
                         Err(e) => {
                             error!("Error receiving from channel. {}", &e);
@@ -319,11 +320,13 @@ impl GearmanServer {
                                 let socket = socket.deref();
                                 poll.reregister(socket, Token(token), remote.interest,
                                                 PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                debug!("{} registered", token);
                             }
                         },
                     }
                 },
                 SHUTDOWN_TOKEN => {
+                    debug!("Shutdown token arriving on channel");
                     match shutdown_receiver.try_recv() {
                         Err(e) => {
                             error!("Error receiving from channel. {}", &e);
