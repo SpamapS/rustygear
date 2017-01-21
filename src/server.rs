@@ -8,12 +8,13 @@ use std::io::ErrorKind::WouldBlock;
 use std::io;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
+use std::sync::mpsc::TryRecvError;
+use std::thread;
 
 use mio::*;
 use mio::channel::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
-use threadpool::ThreadPool;
 
 use ::constants::*;
 use ::packet::{Packet, EofError};
@@ -72,8 +73,7 @@ impl GearmanRemote {
     pub fn dispatch_read(&mut self, job_count: Arc<AtomicUsize>,
                          packet_sender: &Sender<Arc<Vec<Packet>>>,
                          poll_sender: &Sender<usize>,
-                         shutdown_sender: &Sender<usize>,
-                         pool: &ThreadPool) {
+                         shutdown_sender: &Sender<usize>) {
         debug!("{} readable", self);
         GearmanRemote::_dispatch_read(self.socket.clone(),
                                      self.worker.clone(),
@@ -84,8 +84,7 @@ impl GearmanRemote {
                                      packet_sender.clone(),
                                      poll_sender.clone(),
                                      shutdown_sender.clone(),
-                                     Packet::new(self.token),
-                                     pool);
+                                     Packet::new(self.token));
     }
 
     fn _dispatch_read(socket: Arc<Mutex<TcpStream>>,
@@ -97,9 +96,8 @@ impl GearmanRemote {
                       packet_sender: Sender<Arc<Vec<Packet>>>,
                       poll_sender: Sender<usize>,
                       shutdown_sender: Sender<usize>,
-                      mut packet: Packet,
-                      pool: &ThreadPool) {
-        pool.execute(move || {
+                      mut packet: Packet) {
+        thread::spawn(move || {
             match packet.from_socket(socket,
                                      worker,
                                      workers,
@@ -218,7 +216,6 @@ impl GearmanServer {
                       Ready::readable(),
                       PollOpt::edge()).unwrap();
         let mut pevents = Events::with_capacity(1024);
-        let pool = ThreadPool::new(N_WORKERS);
         loop {
             poll.poll(&mut pevents, Some(Duration::from_millis(1000))).unwrap();
             for event in pevents.iter() {
@@ -229,8 +226,7 @@ impl GearmanServer {
                                 &poll_sender,
                                 &poll_receiver,
                                 &shutdown_sender,
-                                &shutdown_receiver,
-                                &pool)
+                                &shutdown_receiver)
             }
         }
     }
@@ -243,8 +239,7 @@ impl GearmanServer {
                   poll_sender: &Sender<usize>,
                   poll_receiver: &Receiver<usize>,
                   shutdown_sender: &Sender<usize>,
-                  shutdown_receiver: &Receiver<usize>,
-                  pool: &ThreadPool) {
+                  shutdown_receiver: &Receiver<usize>) {
         if event.kind().is_readable() {
             match event.token() {
                 SERVER_TOKEN => {
@@ -272,17 +267,19 @@ impl GearmanServer {
                 PACKETS_TOKEN => {
                     debug!("Packets arriving on channel");
                     let mut send_packets = Vec::new();
-                    match packet_receiver.try_recv() {
-                        Err(e) => {
-                            error!("Error receiving from channel. {}", &e);
-                            return
-                        },
-                        Ok(packets) => {
-                            // Wake ups get queued in processing
-                            send_packets.extend(self.workers.do_wakes());
-                            // Now tack these packets onto the end of send_packets
-                            for p in packets.iter() {
-                                send_packets.push(p.clone());
+                    loop {
+                        match packet_receiver.try_recv() {
+                            Err(TryRecvError::Empty) => break,
+                            Err(e) => {
+                                panic!("Packets channel is fully disconnected.");
+                            }
+                            Ok(packets) => {
+                                // Wake ups get queued in processing
+                                send_packets.extend(self.workers.do_wakes());
+                                // Now tack these packets onto the end of send_packets
+                                for p in packets.iter() {
+                                    send_packets.push(p.clone());
+                                }
                             }
                         }
                     }
@@ -308,45 +305,51 @@ impl GearmanServer {
                 }
                 POLL_TOKEN => {
                     debug!("Poll token arriving on channel");
-                    match poll_receiver.try_recv() {
-                        Err(e) => {
-                            error!("Error receiving from channel. {}", &e);
-                            return
-                        },
-                        Ok(token) => {
-                            let mut remote = self.remotes.get_mut(&token).unwrap();
-                            let socket = remote.socket.lock().unwrap();
-                            {
-                                let socket = socket.deref();
-                                poll.reregister(socket, Token(token), remote.interest,
-                                                PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                                debug!("{} registered", token);
-                            }
-                        },
+                    loop {
+                        match poll_receiver.try_recv() {
+                            Err(TryRecvError::Empty) => break,
+                            Err(e) => {
+                                error!("Error receiving from channel. {}", &e);
+                                return
+                            },
+                            Ok(token) => {
+                                let mut remote = self.remotes.get_mut(&token).unwrap();
+                                let socket = remote.socket.lock().unwrap();
+                                {
+                                    let socket = socket.deref();
+                                    poll.reregister(socket, Token(token), remote.interest,
+                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                    debug!("{} registered", token);
+                                }
+                            },
+                        }
                     }
                 },
                 SHUTDOWN_TOKEN => {
                     debug!("Shutdown token arriving on channel");
-                    match shutdown_receiver.try_recv() {
-                        Err(e) => {
-                            error!("Error receiving from channel. {}", &e);
-                            return
-                        },
-                        Ok(token) => {
-                            match self.remotes.remove(&token) {
-                                None => warn!("No remote for token == {}", token),
-                                Some(remote) => {
-                                    info!("{} hung up", &remote);
-                                    remote.shutdown();
-                                },
-                            }
-                        },
+                    loop {
+                        match shutdown_receiver.try_recv() {
+                            Err(TryRecvError::Empty) => break,
+                            Err(e) => {
+                                error!("Error receiving from channel. {}", &e);
+                                return
+                            },
+                            Ok(token) => {
+                                match self.remotes.remove(&token) {
+                                    None => warn!("No remote for token == {}", token),
+                                    Some(remote) => {
+                                        info!("{} hung up", &remote);
+                                        remote.shutdown();
+                                    },
+                                }
+                            },
+                        }
                     }
                 },
                 token => {
                     let token = token.0;
                     let mut remote = self.remotes.get_mut(&token).unwrap();
-                    remote.dispatch_read(self.job_count.clone(), packet_sender, poll_sender, shutdown_sender, pool);
+                    remote.dispatch_read(self.job_count.clone(), packet_sender, poll_sender, shutdown_sender);
                 },
             }
         }

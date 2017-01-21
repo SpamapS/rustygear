@@ -326,6 +326,10 @@ impl Packet {
                     if tot_read == 4 {
                         // validate typ
                         self.ptype = BigEndian::read_u32(&typ_buf); 
+                        if self.ptype as usize >= PTYPES.len() {
+                            error!("Got a strange packet type ({:?} == {}). Shutting down connection.", &typ_buf, self.ptype);
+                            return Err(EofError {})
+                        }
                         debug!("We got a {} from {:?}", &PTYPES[self.ptype as usize].name, &typ_buf);
                     };
                     break
