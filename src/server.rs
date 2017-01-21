@@ -15,16 +15,16 @@ use mio::*;
 use mio::channel::*;
 use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
+use threadpool::ThreadPool;
 
 use ::constants::*;
-use ::packet::{Packet, EofError};
+use ::packet::Packet;
 use ::queues::*;
 use ::worker::*;
 
 struct GearmanRemote {
     socket: Arc<Mutex<TcpStream>>,
     addr: SocketAddr,
-    packet: Packet,
     queues: SharedJobStorage,
     worker: Arc<Mutex<Worker>>,
     workers: SharedWorkers,
@@ -53,7 +53,6 @@ impl GearmanRemote {
         GearmanRemote {
             socket: Arc::new(Mutex::new(socket)),
             addr: addr,
-            packet: Packet::new(token),
             queues: queues,
             worker: Arc::new(Mutex::new(Worker::new())),
             workers: workers,
@@ -73,7 +72,8 @@ impl GearmanRemote {
     pub fn dispatch_read(&mut self, job_count: Arc<AtomicUsize>,
                          packet_sender: &Sender<Arc<Vec<Packet>>>,
                          poll_sender: &Sender<usize>,
-                         shutdown_sender: &Sender<usize>) {
+                         shutdown_sender: &Sender<usize>,
+                         pool: &mut ThreadPool) {
         debug!("{} readable", self);
         GearmanRemote::_dispatch_read(self.socket.clone(),
                                      self.worker.clone(),
@@ -84,6 +84,7 @@ impl GearmanRemote {
                                      packet_sender.clone(),
                                      poll_sender.clone(),
                                      shutdown_sender.clone(),
+                                     pool,
                                      Packet::new(self.token));
     }
 
@@ -96,8 +97,9 @@ impl GearmanRemote {
                       packet_sender: Sender<Arc<Vec<Packet>>>,
                       poll_sender: Sender<usize>,
                       shutdown_sender: Sender<usize>,
+                      pool: &mut ThreadPool,
                       mut packet: Packet) {
-        thread::spawn(move || {
+        pool.execute(move || {
             match packet.from_socket(socket,
                                      worker,
                                      workers,
@@ -113,7 +115,7 @@ impl GearmanRemote {
                     }
                     poll_sender.send(token).unwrap();
                 },
-                Err(e) => {
+                Err(_) => {
                     shutdown_sender.send(token).unwrap();
                 }
             }
@@ -199,6 +201,7 @@ impl GearmanServer {
         let (packet_sender, packet_receiver) = channel();
         let (poll_sender, poll_receiver) = channel();
         let (shutdown_sender, shutdown_receiver) = channel();
+        let mut pool = ThreadPool::new(N_WORKERS);
         poll.register(&packet_receiver,
                       PACKETS_TOKEN,
                       Ready::readable(),
@@ -221,6 +224,7 @@ impl GearmanServer {
             for event in pevents.iter() {
                 self.poll_inner(&mut poll,
                                 &event,
+                                &mut pool,
                                 &packet_sender,
                                 &packet_receiver,
                                 &poll_sender,
@@ -234,6 +238,7 @@ impl GearmanServer {
     fn poll_inner(&mut self,
                   poll: &mut Poll,
                   event: &Event,
+                  pool: &mut ThreadPool,
                   packet_sender: &Sender<Arc<Vec<Packet>>>,
                   packet_receiver: &Receiver<Arc<Vec<Packet>>>,
                   poll_sender: &Sender<usize>,
@@ -271,7 +276,7 @@ impl GearmanServer {
                         match packet_receiver.try_recv() {
                             Err(TryRecvError::Empty) => break,
                             Err(e) => {
-                                panic!("Packets channel is fully disconnected.");
+                                panic!("Packets channel is fully disconnected. {}", &e);
                             }
                             Ok(packets) => {
                                 // Wake ups get queued in processing
@@ -313,7 +318,7 @@ impl GearmanServer {
                                 return
                             },
                             Ok(token) => {
-                                let mut remote = self.remotes.get_mut(&token).unwrap();
+                                let remote = self.remotes.get_mut(&token).unwrap();
                                 let socket = remote.socket.lock().unwrap();
                                 {
                                     let socket = socket.deref();
@@ -349,7 +354,7 @@ impl GearmanServer {
                 token => {
                     let token = token.0;
                     let mut remote = self.remotes.get_mut(&token).unwrap();
-                    remote.dispatch_read(self.job_count.clone(), packet_sender, poll_sender, shutdown_sender);
+                    remote.dispatch_read(self.job_count.clone(), packet_sender, poll_sender, shutdown_sender, pool);
                 },
             }
         }
