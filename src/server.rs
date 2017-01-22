@@ -9,7 +9,6 @@ use std::io;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::TryRecvError;
-use std::thread;
 
 use mio::*;
 use mio::channel::*;
@@ -318,13 +317,20 @@ impl GearmanServer {
                                 return
                             },
                             Ok(token) => {
-                                let remote = self.remotes.get_mut(&token).unwrap();
-                                let socket = remote.socket.lock().unwrap();
-                                {
-                                    let socket = socket.deref();
-                                    poll.reregister(socket, Token(token), remote.interest,
-                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                                    debug!("{} registered", token);
+                                match self.remotes.get_mut(&token) {
+                                    None => {
+                                        debug!("Poll token received for shutdown client ({})", token);
+                                        break
+                                    },
+                                    Some(remote) => {
+                                        let socket = remote.socket.lock().unwrap();
+                                        {
+                                            let socket = socket.deref();
+                                            poll.reregister(socket, Token(token), remote.interest,
+                                                            PollOpt::edge() | PollOpt::oneshot()).unwrap();
+                                            debug!("{} registered", token);
+                                        }
+                                    }
                                 }
                             },
                         }
