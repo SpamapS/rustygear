@@ -1,4 +1,5 @@
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate byteorder;
 extern crate bytes;
 extern crate memchr;

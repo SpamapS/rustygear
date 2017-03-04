@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt;
-use std::net::{SocketAddr};
+use std::net::SocketAddr;
 use std::time::Duration;
 use std::io::Write;
 use std::io::ErrorKind::WouldBlock;
@@ -13,7 +13,7 @@ use mio::tcp::*;
 use bytes::buf::{Buf, ByteBuf};
 
 use ::constants::*;
-use ::packet::{Packet, EofError};
+use packet::{Packet, EofError};
 use ::queues::*;
 use ::worker::*;
 
@@ -42,7 +42,12 @@ pub struct GearmanServer {
 const SERVER_TOKEN: Token = Token(0);
 
 impl GearmanRemote {
-    pub fn new(socket: TcpStream, addr: SocketAddr, queues: SharedJobStorage, token: Token, workers: SharedWorkers) -> GearmanRemote {
+    pub fn new(socket: TcpStream,
+               addr: SocketAddr,
+               queues: SharedJobStorage,
+               token: Token,
+               workers: SharedWorkers)
+               -> GearmanRemote {
         GearmanRemote {
             socket: socket,
             addr: addr,
@@ -66,11 +71,13 @@ impl GearmanRemote {
     pub fn read(&mut self, job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>, EofError> {
         let mut ret = Ok(None);
         debug!("{} readable", self);
-        match self.packet.from_socket(&mut self.socket,
-                                      &mut self.worker,
-                                      self.workers.clone(),
-                                      self.queues.clone(),
-                                      self.token, job_count)? {
+        match self.packet
+            .from_socket(&mut self.socket,
+                         &mut self.worker,
+                         self.workers.clone(),
+                         self.queues.clone(),
+                         self.token,
+                         job_count)? {
             None => debug!("{} Done reading", self),
             Some(p) => {
                 ret = Ok(Some(p));
@@ -95,13 +102,13 @@ impl GearmanRemote {
             match self.socket.write(buf.bytes()) {
                 Ok(value) => {
                     buf.advance(value);
-                    continue
-                },
+                    continue;
+                }
                 Err(err) => {
                     if let WouldBlock = err.kind() {
-                        break
+                        break;
                     } else {
-                        return Err(err)
+                        return Err(err);
                     }
                 }
             };
@@ -117,20 +124,23 @@ impl GearmanRemote {
         match self.worker.job() {
             Some(ref mut j) => {
                 self.queues.clone().add_job(j.clone(), PRIORITY_NORMAL, None);
-            },
-            None => {},
+            }
+            None => {}
         };
         self.workers.shutdown(&self.token);
         match self.socket.shutdown(Shutdown::Both) {
             Err(e) => warn!("{:?} fail on shutdown ({:?})", self.addr, e),
-            Ok(_) => {},
+            Ok(_) => {}
         }
     }
 }
 
 impl fmt::Display for GearmanRemote {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Remote {{ addr: {:?} token: {:?} }}", self.addr, self.token)
+        write!(f,
+               "Remote {{ addr: {:?} token: {:?} }}",
+               self.addr,
+               self.token)
     }
 }
 
@@ -138,7 +148,8 @@ impl GearmanServer {
     pub fn new(server_socket: TcpListener,
                queues: SharedJobStorage,
                workers: SharedWorkers,
-               job_count: AtomicUsize) -> GearmanServer {
+               job_count: AtomicUsize)
+               -> GearmanServer {
         GearmanServer {
             token_counter: 1,
             remotes: HashMap::new(),
@@ -153,10 +164,8 @@ impl GearmanServer {
 impl GearmanServer {
     pub fn poll(&mut self) {
         let mut poll = Poll::new().unwrap();
-        poll.register(&self.socket,
-                      Token(0),
-                      Ready::readable(),
-                      PollOpt::edge()).unwrap();
+        poll.register(&self.socket, Token(0), Ready::readable(), PollOpt::edge())
+            .unwrap();
         let mut pevents = Events::with_capacity(1024);
         loop {
             poll.poll(&mut pevents, Some(Duration::from_millis(1000))).unwrap();
@@ -174,19 +183,26 @@ impl GearmanServer {
                         Err(e) => {
                             error!("Accept error: {}", e);
                             return;
-                        },
+                        }
                         Ok((sock, addr)) => (sock, addr),
                     };
 
                     self.token_counter += 1;
                     let new_token = Token(self.token_counter);
 
-                    self.remotes.insert(new_token, GearmanRemote::new(remote_socket, remote_addr, self.queues.clone(), new_token, self.workers.clone()));
+                    self.remotes.insert(new_token,
+                                        GearmanRemote::new(remote_socket,
+                                                           remote_addr,
+                                                           self.queues.clone(),
+                                                           new_token,
+                                                           self.workers.clone()));
 
                     poll.register(&self.remotes[&new_token].socket,
-                                  new_token, Ready::readable(),
-                                  PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                },
+                                  new_token,
+                                  Ready::readable(),
+                                  PollOpt::edge() | PollOpt::oneshot())
+                        .unwrap();
+                }
                 token => {
                     let mut shutdown = false;
                     {
@@ -200,7 +216,7 @@ impl GearmanServer {
                                         Some(packets) => {
                                             for p in packets.into_iter() {
                                                 match p.remote {
-                                                    None => remote.queue_packet(&p), // Packet is for us
+                                                    None => remote.queue_packet(&p), // for us
                                                     Some(t) => {
                                                         if t == token {
                                                             // Packet is also meant for us
@@ -209,16 +225,19 @@ impl GearmanServer {
                                                             // Packet is for a different remote
                                                             other_packets.push(p);
                                                         }
-                                                    },
+                                                    }
                                                 };
                                             }
-                                        },
-                                        None => {},
+                                        }
+                                        None => {}
                                     }
                                     other_packets.extend(self.workers.do_wakes());
-                                    poll.reregister(&remote.socket, token, remote.interest,
-                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                                },
+                                    poll.reregister(&remote.socket,
+                                                    token,
+                                                    remote.interest,
+                                                    PollOpt::edge() | PollOpt::oneshot())
+                                        .unwrap();
+                                }
                                 Err(e) => {
                                     info!("{} hung up: {:?}", &remote, &e);
                                     shutdown = true;
@@ -231,9 +250,12 @@ impl GearmanServer {
                                 None => warn!("No remote for packet, dropping: {:?}", &p),
                                 Some(mut remote) => {
                                     remote.queue_packet(&p);
-                                    poll.reregister(&remote.socket, t, remote.interest,
-                                                    PollOpt::edge() | PollOpt::oneshot()).unwrap();
-                                },
+                                    poll.reregister(&remote.socket,
+                                                    t,
+                                                    remote.interest,
+                                                    PollOpt::edge() | PollOpt::oneshot())
+                                        .unwrap();
+                                }
                             }
                         }
                     }
@@ -241,7 +263,7 @@ impl GearmanServer {
                         let remote = self.remotes.remove(&token).unwrap();
                         remote.shutdown();
                     }
-                },
+                }
             }
         }
 
@@ -253,8 +275,13 @@ impl GearmanServer {
                     {
                         let mut remote = self.remotes.get_mut(&token).unwrap();
                         match remote.write() {
-                            Ok(_) => poll.reregister(&remote.socket, token, remote.interest,
-                                                     PollOpt::edge() | PollOpt::oneshot()).unwrap(),
+                            Ok(_) => {
+                                poll.reregister(&remote.socket,
+                                                token,
+                                                remote.interest,
+                                                PollOpt::edge() | PollOpt::oneshot())
+                                    .unwrap()
+                            }
                             Err(e) => {
                                 info!("remote({}) hung up: {}", &remote, e);
                                 shutdown = true;
@@ -265,7 +292,7 @@ impl GearmanServer {
                         let remote = self.remotes.remove(&token).unwrap();
                         remote.shutdown();
                     }
-                },
+                }
             }
         }
     }

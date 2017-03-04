@@ -1,4 +1,5 @@
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 extern crate env_logger;
 extern crate mio;
 
@@ -24,10 +25,7 @@ fn main() {
 
     let job_count = AtomicUsize::new(0);
 
-    let mut server = GearmanServer::new(server_socket,
-                                        queues.clone(),
-                                        workers.clone(),
-                                        job_count);
+    let mut server = GearmanServer::new(server_socket, queues.clone(), workers.clone(), job_count);
 
     server.poll();
 }

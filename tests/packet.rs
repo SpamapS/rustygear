@@ -15,7 +15,7 @@ fn test_next_binary_data() {
     let f = str::from_utf8(f).unwrap();
     assert_eq!(f, "handle");
     let f2 = i.next().unwrap();
-    assert_eq!(f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f' ]);
+    assert_eq!(f2, [b'd', b'a', b't', b'a', b'\0', b'\x7f']);
 }
 
 #[test]
@@ -84,12 +84,14 @@ fn test_next_3nargs() {
 fn test_packet_debug() {
     let p = Packet::new_res(NOOP, Box::new(Vec::new()));
     let f = format!("->{:?}<-", p);
-    assert_eq!("->Packet { magic: \"RES\", ptype: NOOP, size: 0, remote: None }<-", &f);
+    assert_eq!("->Packet { magic: \"RES\", ptype: NOOP, size: 0, remote: None }<-",
+               &f);
 }
 
 #[test]
 fn test_packet_debug_unimplemented() {
     let p = Packet::new_res((PTYPES.len() + 10) as u32, Box::new(Vec::new()));
     let f = format!("->{:?}<-", p);
-    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__, size: 0, remote: None }<-", &f);
+    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__, size: 0, remote: None }<-",
+               &f);
 }

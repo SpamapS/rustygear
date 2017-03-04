@@ -10,7 +10,7 @@ use mio::Token;
 
 use ::constants::*;
 use ::packet::*;
-use ::job::Job;
+use job::Job;
 
 #[derive(Debug)]
 pub struct WorkerSet {
@@ -54,7 +54,7 @@ impl Wake for SharedWorkers {
         let mut inserts = Vec::new();
         debug!("allworkers({:?}) = {:?}", fname, workers.allworkers);
         match workers.allworkers.get_mut(fname) {
-            None => {},
+            None => {}
             Some(workerset) => {
                 // Copy the contents into active
                 workerset.active.extend(workerset.inactive.iter());
@@ -82,17 +82,19 @@ impl Wake for SharedWorkers {
         let mut workers = self.lock().unwrap();
         for fname in worker.iter() {
             let mut add = false;
-            debug!("Looking for {:?} in workers.allworkers, {:?}", &fname, &workers.allworkers);
+            debug!("Looking for {:?} in workers.allworkers, {:?}",
+                   &fname,
+                   &workers.allworkers);
             match workers.allworkers.get_mut(&fname) {
                 None => {
                     debug!("Did not find {:?}", &fname);
                     add = true;
-                },
+                }
                 Some(workerset) => {
                     debug!("Deactivating remote {:?} from fname {:?}", remote, &fname);
                     workerset.active.remove(&remote);
                     workerset.inactive.insert(remote);
-                },
+                }
             };
             if add {
                 debug!("Adding new workerset {:?} from fname {:?}", remote, &fname);
@@ -110,11 +112,11 @@ impl Wake for SharedWorkers {
             match workers.allworkers.get_mut(&fname) {
                 None => {
                     add = true;
-                },
+                }
                 Some(workerset) => {
                     workerset.inactive.remove(&remote);
                     workerset.active.insert(remote);
-                },
+                }
             };
             if add {
                 let mut workerset = WorkerSet::new();
@@ -127,12 +129,8 @@ impl Wake for SharedWorkers {
     fn count_workers(&mut self, fname: &Vec<u8>) -> (usize, usize) {
         let workers = self.lock().unwrap();
         match workers.allworkers.get(fname) {
-            None => {
-                (0, 0)
-            },
-            Some(workerset) => {
-                (workerset.active.len(), workerset.inactive.len())
-            },
+            None => (0, 0),
+            Some(workerset) => (workerset.active.len(), workerset.inactive.len()),
         }
     }
 
@@ -186,10 +184,10 @@ impl Worker {
 
     pub fn unassign_job(&mut self) {
         match self.job {
-            None => {},
+            None => {}
             Some(ref j) => {
                 match Rc::weak_count(j) {
-                    0 => {},
+                    0 => {}
                     a @ _ => {
                         warn!("Unassigning queued {:?} ({}+{} refs)",
                               j,
