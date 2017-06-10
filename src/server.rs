@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use mio::*;
 use mio::tcp::*;
-use bytes::buf::{Buf, ByteBuf};
+use bytes::BytesMut;
 
 use ::constants::*;
 use packet::{Packet, EofError};
@@ -24,7 +24,7 @@ struct GearmanRemote {
     queues: SharedJobStorage,
     worker: Worker,
     workers: SharedWorkers,
-    sendqueue: Vec<ByteBuf>,
+    sendqueue: Vec<BytesMut>,
     interest: Ready,
     token: Token,
 }
@@ -63,7 +63,7 @@ impl GearmanRemote {
 
     pub fn queue_packet(&mut self, packet: &Packet) {
         info!("{} Queueing {:?}", self, &packet);
-        self.sendqueue.push(ByteBuf::from_slice(&packet.to_byteslice()));
+        //self.sendqueue.push(BytesMut::from_slice(&packet.to_byteslice()));
         self.interest.remove(Ready::readable());
         self.interest.insert(Ready::writable());
     }
@@ -94,14 +94,15 @@ impl GearmanRemote {
     pub fn write(&mut self) -> Result<(), io::Error> {
         debug!("{} writable", self);
         while !self.sendqueue.is_empty() {
-            if !self.sendqueue.first().unwrap().has_remaining() {
+            /*if !self.sendqueue.first().unwrap().has_remaining() {
                 self.sendqueue.pop();
                 continue;
             }
+            */
             let buf = self.sendqueue.first_mut().unwrap();
-            match self.socket.write(buf.bytes()) {
+            match self.socket.write(&buf) {
                 Ok(value) => {
-                    buf.advance(value);
+                    buf.split_to(value);
                     continue;
                 }
                 Err(err) => {

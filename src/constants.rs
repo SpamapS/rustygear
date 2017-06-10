@@ -56,6 +56,9 @@ pub const JOB_ASSIGN_ALL: u32 = 40;
 pub const GET_STATUS_UNIQUE: u32 = 41;
 pub const STATUS_RES_UNIQUE: u32 = 42;
 
+pub const ADMIN_UNKNOWN: u32 = 10000;
+pub const ADMIN_STATUS: u32 = 10001;
+pub const ADMIN_VERSION: u32 = 10002;
 
 pub const REQ: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
 pub const RES: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
