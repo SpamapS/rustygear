@@ -10,6 +10,7 @@ use tokio_proto::streaming::pipeline::Frame;
 use constants::*;
 use packet::{PacketMagic, PTYPES};
 
+#[derive(Debug)]
 pub struct PacketHeader {
     pub magic: PacketMagic,
     pub ptype: u32,
@@ -17,7 +18,7 @@ pub struct PacketHeader {
 }
 
 pub struct PacketCodec {
-    data_todo: Option<usize>,
+    pub data_todo: Option<usize>,
 }
 
 type PacketItem = Frame<PacketHeader, BytesMut, io::Error>;
@@ -51,16 +52,21 @@ impl PacketHeader {
     }
 
     pub fn decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {
+        debug!("Decoding {:?}", buf);
         // Peek at first 4
         // Is this a req/res
-        let REQ_slice = &REQ[..];
-        let RES_slice = &RES[..];
-        let magic = match &buf[0..4] {
-            REQ_slice => PacketMagic::REQ,
-            RES_slice => PacketMagic::RES,
+        if buf.len() < 4 {
+            return Ok(None);
+        }
+        let mut magic_buf: [u8; 4] = [0; 4];
+        magic_buf.clone_from_slice(&buf[0..4]);
+        let magic = match magic_buf {
+            REQ => PacketMagic::REQ,
+            RES => PacketMagic::RES,
             // TEXT/ADMIN protocol
             _ => PacketMagic::TEXT,
         };
+        debug!("Magic is {:?}", magic);
         if magic == PacketMagic::TEXT {
             debug!("admin protocol detected");
             return PacketHeader::admin_decode(buf);
@@ -121,7 +127,10 @@ impl Decoder for PacketCodec {
                     None => Ok(None),
                 }
             }
-            Some(0) => Ok(Some(Frame::Body { chunk: None })),
+            Some(0) => {
+                self.data_todo = None;
+                Ok(Some(Frame::Body { chunk: None }))
+            }
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
                 self.data_todo = Some(data_todo - chunk_size);
@@ -136,6 +145,7 @@ impl Encoder for PacketCodec {
     type Error = io::Error;
 
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
+        debug!("Encoding {:?}", msg);
         match msg {
             Frame::Message { message, body } => buf.extend(message.to_bytes()),
             Frame::Body { chunk } => {

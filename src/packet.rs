@@ -51,7 +51,7 @@ pub struct PacketType {
     pub nargs: i8,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum PacketMagic {
     UNKNOWN,
     REQ,
