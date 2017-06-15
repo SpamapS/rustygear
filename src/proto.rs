@@ -1,5 +1,7 @@
 use std::io;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tokio_core::net::TcpStream;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::Framed;
 use tokio_proto::streaming::pipeline::ServerProto;
@@ -7,9 +9,12 @@ use bytes::BytesMut;
 
 use codec::{PacketHeader, PacketCodec};
 
+use queues::{HandleJobStorage, SharedJobStorage};
+use worker::{SharedWorkers, Wake};
+
 pub struct GearmanProto;
 
-impl <T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
+impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
     type Request = PacketHeader;
     type RequestBody = BytesMut;
     type Response = PacketHeader;
@@ -27,4 +32,3 @@ impl <T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
         Ok(io.framed(codec))
     }
 }
-

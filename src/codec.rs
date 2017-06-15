@@ -106,6 +106,14 @@ impl PacketHeader {
         buf.put_u32::<BigEndian>(self.psize);
         buf.freeze()
     }
+
+    pub fn new_text_res(body: &BytesMut) -> PacketHeader {
+        PacketHeader {
+            magic: PacketMagic::TEXT,
+            ptype: ADMIN_RESPONSE,
+            psize: body.len() as u32,
+        }
+    }
 }
 
 impl Decoder for PacketCodec {

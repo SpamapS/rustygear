@@ -8,42 +8,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use memchr::Memchr;
-use mio::Token;
-use mio::tcp::*;
-use mio::deprecated::TryRead;
-use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
+//use mio::net::*;
+//use mio::deprecated::TryRead;
+//use byteorder::{BigEndian, ByteOrder, WriteBytesExt};
+use byteorder::{BigEndian, WriteBytesExt};
 
 use ::constants::*;
 use ::job::*;
 use ::worker::*;
 use ::queues::*;
-
-#[test]
-fn admin_command_status() {
-    let j = Job::new(vec![b'f'], vec![b'u'], Vec::new(), vec![b'h']);
-    let mut w = Worker::new();
-    w.can_do(vec![b'f']);
-    let mut storage = SharedJobStorage::new_job_storage();
-    let mut workers = SharedWorkers::new_workers();
-    storage.add_job(Rc::new(j), PRIORITY_NORMAL, None);
-    workers.sleep(&mut w, Token(1));
-    let t = Token(0);
-    let p = Packet::new(t);
-    let response = p.admin_command_status(storage, workers);
-    let response = str::from_utf8(&response.data).unwrap();
-    assert_eq!("f\t1\t0\t1\n.\n", response);
-}
-
-#[test]
-fn admin_command_status_empty() {
-    let storage = SharedJobStorage::new_job_storage();
-    let workers = SharedWorkers::new_workers();
-    let t = Token(0);
-    let p = Packet::new(t);
-    let response = p.admin_command_status(storage, workers);
-    let response = str::from_utf8(&response.data).unwrap();
-    assert_eq!(".\n", response);
-}
 
 pub struct PacketType {
     pub name: &'static str,
@@ -64,7 +37,7 @@ pub struct Packet {
     pub ptype: u32,
     pub psize: u32,
     pub data: Box<Vec<u8>>,
-    pub remote: Option<Token>,
+    pub remote: Option<usize>,
     pub consumed: bool,
 }
 
@@ -135,7 +108,7 @@ impl From<Utf8Error> for EofError {
 pub type Result<T> = result::Result<T, ParseError>;
 
 impl Packet {
-    pub fn new(remote: Token) -> Packet {
+    pub fn new(remote: usize) -> Packet {
         Packet {
             magic: PacketMagic::UNKNOWN,
             ptype: 0,
@@ -149,7 +122,7 @@ impl Packet {
     pub fn new_res(ptype: u32, data: Box<Vec<u8>>) -> Packet {
         Packet::new_res_remote(ptype, data, None)
     }
-    pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<Token>) -> Packet {
+    pub fn new_res_remote(ptype: u32, data: Box<Vec<u8>>, remote: Option<usize>) -> Packet {
         Packet {
             magic: PacketMagic::RES,
             ptype: ptype,
@@ -189,27 +162,7 @@ impl Packet {
         }
     }
 
-    fn admin_command_status(&self, storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
-        let mut response = Box::new(Vec::with_capacity(1024 * 1024)); // XXX Wild guess.
-        let storage = storage.lock().unwrap();
-        let queues = storage.queues();
-        for (func, fqueues) in queues.iter() {
-            let mut qtot = 0;
-            for q in fqueues {
-                qtot += q.len();
-            }
-            let (active_workers, inactive_workers) = workers.clone().count_workers(func);
-            response.extend(func);
-            response.extend(format!("\t{}\t{}\t{}\n",
-                                    qtot,
-                                    active_workers,
-                                    inactive_workers + active_workers)
-                .into_bytes());
-        }
-        response.extend(b".\n");
-        Packet::new_text_res(response)
-    }
-
+/*
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
                              storage: SharedJobStorage,
@@ -253,7 +206,7 @@ impl Packet {
                        worker: &mut Worker,
                        workers: SharedWorkers,
                        storage: SharedJobStorage,
-                       remote: Token,
+                       remote: usize,
                        job_count: Arc<&AtomicUsize>)
                        -> result::Result<Option<Vec<Packet>>, EofError> {
         let mut magic_buf = [0; 4];
@@ -401,11 +354,10 @@ impl Packet {
         }
         Ok(None)
     }
-
     pub fn process(&mut self,
                    storage: SharedJobStorage,
                    worker: &mut Worker,
-                   remote: Token,
+                   remote: usize,
                    workers: SharedWorkers,
                    job_count: Arc<&AtomicUsize>)
                    -> Result<Option<Vec<Packet>>> {
@@ -457,11 +409,12 @@ impl Packet {
             }
         }
     }
+*/
 
     fn handle_can_do(&mut self,
                      worker: &mut Worker,
                      workers: SharedWorkers,
-                     remote: Token)
+                     remote: usize)
                      -> Result<Option<Packet>> {
         let mut iter = self.iter();
         let fname = iter.next_field()?;
@@ -481,7 +434,7 @@ impl Packet {
     fn handle_pre_sleep(&mut self,
                         worker: &mut Worker,
                         workers: SharedWorkers,
-                        remote: Token)
+                        remote: usize)
                         -> Result<Option<Packet>> {
         workers.clone().sleep(worker, remote);
         Ok(None)
@@ -567,7 +520,7 @@ impl Packet {
 
     fn handle_submit_job(&mut self,
                          mut storage: SharedJobStorage,
-                         remote: Option<Token>,
+                         remote: Option<usize>,
                          workers: SharedWorkers,
                          priority: JobQueuePriority,
                          job_count: Arc<&AtomicUsize>)
@@ -591,7 +544,7 @@ impl Packet {
             }
         };
         if add {
-            let job = Rc::new(Job::new(fname, unique, data, handle.clone()));
+            let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
             info!("Created job {:?}", job);
             storage.add_job(job.clone(), priority, remote);
         }

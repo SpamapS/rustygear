@@ -3,10 +3,7 @@ extern crate wrappinghashset;
 use self::wrappinghashset::{WrappingHashSet, Iter};
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-
-use mio::Token;
 
 use ::constants::*;
 use ::packet::*;
@@ -14,8 +11,8 @@ use job::Job;
 
 #[derive(Debug)]
 pub struct WorkerSet {
-    inactive: HashSet<Token>,
-    active: HashSet<Token>,
+    inactive: HashSet<usize>,
+    active: HashSet<usize>,
 }
 
 impl WorkerSet {
@@ -29,7 +26,7 @@ impl WorkerSet {
 
 pub struct Workers {
     allworkers: HashMap<Vec<u8>, WorkerSet>,
-    wakeworkers: HashSet<Token>,
+    wakeworkers: HashSet<usize>,
 }
 
 pub type SharedWorkers = Arc<Mutex<Workers>>;
@@ -38,10 +35,10 @@ pub trait Wake {
     fn new_workers() -> Self;
     fn queue_wake(&mut self, &Vec<u8>);
     fn do_wakes(&mut self) -> Vec<Packet>;
-    fn sleep(&mut self, &mut Worker, Token);
-    fn wakeup(&mut self, &mut Worker, Token);
+    fn sleep(&mut self, &mut Worker, usize);
+    fn wakeup(&mut self, &mut Worker, usize);
     fn count_workers(&mut self, &Vec<u8>) -> (usize, usize);
-    fn shutdown(&mut self, remote: &Token);
+    fn shutdown(&mut self, remote: usize);
 }
 
 impl Wake for SharedWorkers {
@@ -77,7 +74,7 @@ impl Wake for SharedWorkers {
         packets
     }
 
-    fn sleep(&mut self, worker: &mut Worker, remote: Token) {
+    fn sleep(&mut self, worker: &mut Worker, remote: usize) {
         debug!("Sleeping with fnames = {:?}", worker.functions);
         let mut workers = self.lock().unwrap();
         for fname in worker.iter() {
@@ -105,7 +102,7 @@ impl Wake for SharedWorkers {
         }
     }
 
-    fn wakeup(&mut self, worker: &mut Worker, remote: Token) {
+    fn wakeup(&mut self, worker: &mut Worker, remote: usize) {
         let mut workers = self.lock().unwrap();
         for fname in worker.iter() {
             let mut add = false;
@@ -134,7 +131,7 @@ impl Wake for SharedWorkers {
         }
     }
 
-    fn shutdown(&mut self, remote: &Token) {
+    fn shutdown(&mut self, remote: usize) {
         let mut workers = self.lock().unwrap();
         for (_, workerset) in workers.allworkers.iter_mut() {
             workerset.inactive.remove(&remote);
@@ -155,7 +152,7 @@ impl Workers {
 #[derive(Debug)]
 pub struct Worker {
     pub functions: WrappingHashSet<Vec<u8>>,
-    job: Option<Rc<Job>>,
+    job: Option<Arc<Job>>,
 }
 
 impl Worker {
@@ -178,7 +175,7 @@ impl Worker {
         self.functions.iter()
     }
 
-    pub fn assign_job(&mut self, job: &Rc<Job>) {
+    pub fn assign_job(&mut self, job: &Arc<Job>) {
         self.job = Some(job.clone());
     }
 
@@ -186,12 +183,12 @@ impl Worker {
         match self.job {
             None => {}
             Some(ref j) => {
-                match Rc::weak_count(j) {
+                match Arc::weak_count(j) {
                     0 => {}
                     a @ _ => {
                         warn!("Unassigning queued {:?} ({}+{} refs)",
                               j,
-                              Rc::strong_count(j),
+                              Arc::strong_count(j),
                               a);
                     }
                 }
@@ -201,7 +198,7 @@ impl Worker {
     }
 
 
-    pub fn job(&mut self) -> Option<Rc<Job>> {
+    pub fn job(&mut self) -> Option<Arc<Job>> {
         self.job.clone()
     }
 }

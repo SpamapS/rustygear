@@ -1,6 +1,6 @@
 [package]
 name = "rustygear"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
@@ -13,6 +13,7 @@ env_logger = "*"
 mio = "0.6"
 wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }
 memchr = "*"
+tokio-core = "*"
 tokio-proto = "*"
 tokio-io = "*"
 tokio-service = "*"

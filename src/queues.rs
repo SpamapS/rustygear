@@ -1,28 +1,25 @@
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet, VecDeque};
-
-use mio::Token;
 
 use job::Job;
 use worker::Worker;
 
-pub type JobQueue = VecDeque<Rc<Job>>;
+pub type JobQueue = VecDeque<Arc<Job>>;
 pub type JobQueues = HashMap<Vec<u8>, [JobQueue; 3]>;
 
 pub struct JobStorage {
-    jobs: HashMap<Vec<u8>, Rc<Job>>, // Owns the job objects forever
+    jobs: HashMap<Vec<u8>, Arc<Job>>, // Owns the job objects forever
     queues: JobQueues,
-    remotes_by_unique: HashMap<Vec<u8>, HashSet<Token>>,
-    remotes_by_handle: HashMap<Vec<u8>, Vec<Token>>,
+    remotes_by_unique: HashMap<Vec<u8>, HashSet<usize>>,
+    remotes_by_handle: HashMap<Vec<u8>, Vec<usize>>,
 }
 
 pub type SharedJobStorage = Arc<Mutex<JobStorage>>;
 
 pub trait HandleJobStorage {
     fn new_job_storage() -> SharedJobStorage;
-    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<Token>) -> Option<Vec<u8>>;
-    fn add_job(&mut self, job: Rc<Job>, priority: JobQueuePriority, remote: Option<Token>);
+    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<usize>) -> Option<Vec<u8>>;
+    fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>);
     fn get_job(&mut self, worker: &mut Worker) -> bool;
 }
 
@@ -57,11 +54,11 @@ impl JobStorage {
         self.remotes_by_unique.remove(unique);
     }
 
-    pub fn remotes_by_unique(&self, unique: &Vec<u8>) -> Option<&HashSet<Token>> {
+    pub fn remotes_by_unique(&self, unique: &Vec<u8>) -> Option<&HashSet<usize>> {
         self.remotes_by_unique.get(unique)
     }
 
-    pub fn remotes_by_handle(&self, handle: &Vec<u8>) -> Option<&Vec<Token>> {
+    pub fn remotes_by_handle(&self, handle: &Vec<u8>) -> Option<&Vec<usize>> {
         self.remotes_by_handle.get(handle)
     }
 }
@@ -71,7 +68,7 @@ impl HandleJobStorage for SharedJobStorage {
         Arc::new(Mutex::new(JobStorage::new()))
     }
 
-    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<Token>) -> Option<Vec<u8>> {
+    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<usize>) -> Option<Vec<u8>> {
         let mut storage = self.lock().unwrap();
         let handle = match storage.jobs.get(unique) {
             None => return None,
@@ -107,7 +104,7 @@ impl HandleJobStorage for SharedJobStorage {
     }
 
 
-    fn add_job(&mut self, job: Rc<Job>, priority: JobQueuePriority, remote: Option<Token>) {
+    fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
         let mut storage = self.lock().unwrap();
         if !storage.queues.contains_key(&job.fname) {
             let high_queue = VecDeque::new();
@@ -132,7 +129,7 @@ impl HandleJobStorage for SharedJobStorage {
 
     fn get_job(&mut self, worker: &mut Worker) -> bool {
         let mut storage = self.lock().unwrap();
-        let mut job: Option<Rc<Job>> = None;
+        let mut job: Option<Arc<Job>> = None;
         debug!("{:?}", &worker);
         for func in worker.iter() {
             debug!("func = {:?}", &func);
