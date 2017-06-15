@@ -1,17 +1,18 @@
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::{future, Future, BoxFuture, Stream};
 use tokio_proto::streaming::{Message, Body};
 use tokio_service::Service;
 
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use admin;
 use codec::PacketHeader;
+use job::Job;
 use packet::PacketMagic;
-use queues::{HandleJobStorage, SharedJobStorage};
+use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
 use constants::*;
 
@@ -32,7 +33,18 @@ pub struct GearmanService {
     pub queues: SharedJobStorage,
     pub workers: SharedWorkers,
     pub worker: Arc<Mutex<Worker>>,
-    pub job_count: Arc<Mutex<AtomicUsize>>,
+    pub job_count: Arc<AtomicUsize>,
+}
+
+fn next_field(buf: &mut BytesMut) -> Result<Bytes, io::Error> {
+    match buf[..].iter().position(|b| *b == b'\0') {
+        Some(null_pos) => {
+            let value = buf.split_to(null_pos);
+            buf.split_to(1);
+            Ok(value.freeze())
+        }
+        None => Err(io::Error::new(io::ErrorKind::Other, "Can't find null")),
+    }
 }
 
 impl GearmanService {
@@ -64,7 +76,7 @@ impl GearmanService {
     pub fn new(conn_id: usize,
                queues: SharedJobStorage,
                workers: SharedWorkers,
-               job_count: Arc<Mutex<AtomicUsize>>)
+               job_count: Arc<AtomicUsize>)
                -> GearmanService {
         GearmanService {
             conn_id: conn_id,
@@ -124,7 +136,48 @@ impl GearmanService {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        future::finished(Message::WithBody(PacketHeader::noop(), Body::from(BytesMut::new()))).boxed()
+        future::finished(Message::WithBody(PacketHeader::noop(), Body::from(BytesMut::new())))
+            .boxed()
+    }
+
+    fn handle_submit_job(&self,
+                         priority: JobQueuePriority,
+                         wait: bool,
+                         body: GearmanBody)
+                         -> BoxFuture<GearmanMessage, io::Error> {
+        let mut queues = self.queues.clone();
+        let conn_id = match wait {
+            true => Some(self.conn_id),
+            false => None,
+        };
+        let mut workers = self.workers.clone();
+        let job_count = self.job_count.clone();
+
+        body.concat2().and_then(move |mut fields| {
+            let fname = next_field(&mut fields).unwrap();
+            let unique = next_field(&mut fields).unwrap();
+            let data = fields.freeze();
+            let mut add = false;
+            let handle = match queues.coalesce_unique(&unique, conn_id) {
+                Some(handle) => handle,
+                None => {
+                    workers.queue_wake(&fname);
+                    // H:091234567890
+                    let mut handle = BytesMut::with_capacity(12);
+                    let job_num = job_count.fetch_add(1, Ordering::Relaxed);
+                    debug!("job_num = {}", job_num);
+                    handle.extend(format!("H:{:010}", job_num).as_bytes());
+                    add = true;
+                    handle.freeze()
+                }
+            };
+            if add {
+                let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
+                info!("Created job {:?}", job);
+                queues.add_job(job.clone(), priority, conn_id);
+            }
+            future::finished(new_res(JOB_CREATED, BytesMut::from(handle)))
+        }).boxed()
     }
 }
 
@@ -153,13 +206,12 @@ impl Service for GearmanService {
             }
             Message::WithBody(header, body) => {
                 match header.ptype {
-                    /*
-                    SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, false),
-                    SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, false),
-                    SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, false),
-                    SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, true),
-                    SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, true),
-                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true),*/
+                    SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, false, body),
+                    SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, false, body),
+                    SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, false, body),
+                    SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, true, body),
+                    SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, true, body),
+                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true, body),
                     PRE_SLEEP => self.handle_pre_sleep(),
                     CAN_DO => self.handle_can_do(body),/*
                     CANT_DO => self.handle_cant_do(),

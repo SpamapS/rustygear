@@ -10,17 +10,17 @@ pub type JobQueue = VecDeque<Arc<Job>>;
 pub type JobQueues = HashMap<Bytes, [JobQueue; 3]>;
 
 pub struct JobStorage {
-    jobs: HashMap<Vec<u8>, Arc<Job>>, // Owns the job objects forever
+    jobs: HashMap<Bytes, Arc<Job>>, // Owns the job objects forever
     queues: JobQueues,
-    remotes_by_unique: HashMap<Vec<u8>, HashSet<usize>>,
-    remotes_by_handle: HashMap<Vec<u8>, Vec<usize>>,
+    remotes_by_unique: HashMap<Bytes, HashSet<usize>>,
+    remotes_by_handle: HashMap<Bytes, Vec<usize>>,
 }
 
 pub type SharedJobStorage = Arc<Mutex<JobStorage>>;
 
 pub trait HandleJobStorage {
     fn new_job_storage() -> SharedJobStorage;
-    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<usize>) -> Option<Vec<u8>>;
+    fn coalesce_unique(&mut self, unique: &Bytes, remote: Option<usize>) -> Option<Bytes>;
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>);
     fn get_job(&mut self, worker: &mut Worker) -> bool;
 }
@@ -45,7 +45,7 @@ impl JobStorage {
         &self.queues
     }
 
-    pub fn remove_job(&mut self, unique: &Vec<u8>) {
+    pub fn remove_job(&mut self, unique: &Bytes) {
         match self.jobs.get(unique) {
             None => {}
             Some(job) => {
@@ -56,11 +56,11 @@ impl JobStorage {
         self.remotes_by_unique.remove(unique);
     }
 
-    pub fn remotes_by_unique(&self, unique: &Vec<u8>) -> Option<&HashSet<usize>> {
+    pub fn remotes_by_unique(&self, unique: &Bytes) -> Option<&HashSet<usize>> {
         self.remotes_by_unique.get(unique)
     }
 
-    pub fn remotes_by_handle(&self, handle: &Vec<u8>) -> Option<&Vec<usize>> {
+    pub fn remotes_by_handle(&self, handle: &Bytes) -> Option<&Vec<usize>> {
         self.remotes_by_handle.get(handle)
     }
 }
@@ -70,7 +70,7 @@ impl HandleJobStorage for SharedJobStorage {
         Arc::new(Mutex::new(JobStorage::new()))
     }
 
-    fn coalesce_unique(&mut self, unique: &Vec<u8>, remote: Option<usize>) -> Option<Vec<u8>> {
+    fn coalesce_unique(&mut self, unique: &Bytes, remote: Option<usize>) -> Option<Bytes> {
         let mut storage = self.lock().unwrap();
         let handle = match storage.jobs.get(unique) {
             None => return None,

@@ -6,7 +6,7 @@ extern crate tokio_proto;
 
 extern crate rustygear;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio_proto::TcpServer;
 
@@ -24,7 +24,7 @@ fn main() {
     let curr_conn_id = AtomicUsize::new(0);
     let queues = SharedJobStorage::new_job_storage();
     let workers =  SharedWorkers::new_workers();
-    let job_count = Arc::new(Mutex::new(AtomicUsize::new(0)));
+    let job_count = Arc::new(AtomicUsize::new(0));
     let server = TcpServer::new(GearmanProto, address);
     server.serve(move || {
         Ok(GearmanService::new(

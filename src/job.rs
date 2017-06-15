@@ -3,14 +3,14 @@ use std::fmt;
 use bytes::Bytes;
 
 pub struct Job {
-    pub handle: Vec<u8>,
+    pub handle: Bytes,
     pub fname: Bytes,
-    pub unique: Vec<u8>,
-    pub data: Vec<u8>,
+    pub unique: Bytes,
+    pub data: Bytes,
 }
 
 impl Job {
-    pub fn new(fname: Bytes, unique: Vec<u8>, data: Vec<u8>, handle: Vec<u8>) -> Job {
+    pub fn new(fname: Bytes, unique: Bytes, data: Bytes, handle: Bytes) -> Job {
         Job {
             handle: handle,
             fname: fname,
