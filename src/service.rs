@@ -91,6 +91,7 @@ impl GearmanService {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
+        trace!("handle_can_do");
         body.concat2()
             .and_then(move |fname| {
                 let fname = fname.freeze();
@@ -104,32 +105,38 @@ impl GearmanService {
             .boxed()
     }
 
-    fn handle_grab_job_all(&self) -> BoxFuture<GearmanMessage, io::Error> {
+    fn handle_grab_job_all(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
-        let mut worker = worker.lock().unwrap();
-        let ref mut worker = worker;
-        if queues.get_job(worker) {
-            match worker.job() {
-                Some(ref j) => {
-                    let mut data = BytesMut::with_capacity(4 + j.handle.len() + j.fname.len() +
-                                                           j.unique.len() +
-                                                           j.data.len());
-                    data.extend(&j.handle);
-                    data.put_slice(b"\0");
-                    data.extend(&j.fname);
-                    data.put_slice(b"\0");
-                    data.extend(&j.unique);
-                    data.put_slice(b"\0");
-                    // reducer not implemented
-                    data.put_slice(b"\0");
-                    data.extend(&j.data);
-                    return future::finished(new_res(JOB_ASSIGN_ALL, data)).boxed();
-                }
-                None => {}
-            }
-        };
-        future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+        trace!("handle_grab_job_all");
+        body.concat2()
+            .and_then(move |_| {
+                let mut worker = worker.lock().unwrap();
+                let ref mut worker = worker;
+                if queues.get_job(worker) {
+                    match worker.job() {
+                        Some(ref j) => {
+                            let mut data = BytesMut::with_capacity(4 + j.handle.len() +
+                                                                   j.fname.len() +
+                                                                   j.unique.len() +
+                                                                   j.data.len());
+                            data.extend(&j.handle);
+                            data.put_slice(b"\0");
+                            data.extend(&j.fname);
+                            data.put_slice(b"\0");
+                            data.extend(&j.unique);
+                            data.put_slice(b"\0");
+                            // reducer not implemented
+                            data.put_slice(b"\0");
+                            data.extend(&j.data);
+                            return future::finished(new_res(JOB_ASSIGN_ALL, data)).boxed();
+                        }
+                        None => {}
+                    }
+                };
+                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+            })
+            .boxed()
     }
 
     fn handle_pre_sleep(&self) -> BoxFuture<GearmanMessage, io::Error> {
@@ -153,31 +160,33 @@ impl GearmanService {
         let mut workers = self.workers.clone();
         let job_count = self.job_count.clone();
 
-        body.concat2().and_then(move |mut fields| {
-            let fname = next_field(&mut fields).unwrap();
-            let unique = next_field(&mut fields).unwrap();
-            let data = fields.freeze();
-            let mut add = false;
-            let handle = match queues.coalesce_unique(&unique, conn_id) {
-                Some(handle) => handle,
-                None => {
-                    workers.queue_wake(&fname);
-                    // H:091234567890
-                    let mut handle = BytesMut::with_capacity(12);
-                    let job_num = job_count.fetch_add(1, Ordering::Relaxed);
-                    debug!("job_num = {}", job_num);
-                    handle.extend(format!("H:{:010}", job_num).as_bytes());
-                    add = true;
-                    handle.freeze()
+        body.concat2()
+            .and_then(move |mut fields| {
+                let fname = next_field(&mut fields).unwrap();
+                let unique = next_field(&mut fields).unwrap();
+                let data = fields.freeze();
+                let mut add = false;
+                let handle = match queues.coalesce_unique(&unique, conn_id) {
+                    Some(handle) => handle,
+                    None => {
+                        workers.queue_wake(&fname);
+                        // H:091234567890
+                        let mut handle = BytesMut::with_capacity(12);
+                        let job_num = job_count.fetch_add(1, Ordering::Relaxed);
+                        debug!("job_num = {}", job_num);
+                        handle.extend(format!("H:{:010}", job_num).as_bytes());
+                        add = true;
+                        handle.freeze()
+                    }
+                };
+                if add {
+                    let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
+                    info!("Created job {:?}", job);
+                    queues.add_job(job.clone(), priority, conn_id);
                 }
-            };
-            if add {
-                let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
-                info!("Created job {:?}", job);
-                queues.add_job(job.clone(), priority, conn_id);
-            }
-            future::finished(new_res(JOB_CREATED, BytesMut::from(handle)))
-        }).boxed()
+                future::finished(new_res(JOB_CREATED, BytesMut::from(handle)))
+            })
+            .boxed()
     }
 }
 
@@ -217,7 +226,7 @@ impl Service for GearmanService {
                     CANT_DO => self.handle_cant_do(),
                     GRAB_JOB => self.handle_grab_job(),
                     GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),*/
-                    GRAB_JOB_ALL => self.handle_grab_job_all(),/*
+                    GRAB_JOB_ALL => self.handle_grab_job_all(body),/*
                     WORK_COMPLETE => self.handle_work_complete(),
                     WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
                     ECHO_REQ => self.handle_echo_req(&req),*/
