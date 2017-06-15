@@ -1,9 +1,11 @@
+extern crate bytes;
 extern crate futures;
 extern crate tokio_proto;
 extern crate rustygear;
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use futures::{Async, Stream};
 use tokio_proto::streaming::Message;
 
@@ -15,9 +17,9 @@ use rustygear::worker::{Worker, SharedWorkers, Wake};
 
 #[test]
 fn admin_command_status_1job() {
-    let j = Job::new(vec![b'f'], vec![b'u'], Vec::new(), vec![b'h']);
+    let j = Job::new(Bytes::from("f"), vec![b'u'], Vec::new(), vec![b'h']);
     let mut w = Worker::new();
-    w.can_do(vec![b'f']);
+    w.can_do(Bytes::from("f"));
     let mut storage = SharedJobStorage::new_job_storage();
     let mut workers = SharedWorkers::new_workers();
     storage.add_job(Arc::new(j), PRIORITY_NORMAL, None);

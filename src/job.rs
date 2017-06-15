@@ -1,14 +1,16 @@
 use std::fmt;
 
+use bytes::Bytes;
+
 pub struct Job {
     pub handle: Vec<u8>,
-    pub fname: Vec<u8>,
+    pub fname: Bytes,
     pub unique: Vec<u8>,
     pub data: Vec<u8>,
 }
 
 impl Job {
-    pub fn new(fname: Vec<u8>, unique: Vec<u8>, data: Vec<u8>, handle: Vec<u8>) -> Job {
+    pub fn new(fname: Bytes, unique: Vec<u8>, data: Vec<u8>, handle: Vec<u8>) -> Job {
         Job {
             handle: handle,
             fname: fname,

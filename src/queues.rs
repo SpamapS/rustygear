@@ -1,11 +1,13 @@
 use std::sync::{Arc, Mutex};
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use bytes::Bytes;
+
 use job::Job;
 use worker::Worker;
 
 pub type JobQueue = VecDeque<Arc<Job>>;
-pub type JobQueues = HashMap<Vec<u8>, [JobQueue; 3]>;
+pub type JobQueues = HashMap<Bytes, [JobQueue; 3]>;
 
 pub struct JobStorage {
     jobs: HashMap<Vec<u8>, Arc<Job>>, // Owns the job objects forever

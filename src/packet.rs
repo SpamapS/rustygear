@@ -3,8 +3,6 @@ use std::fmt;
 use std::result;
 use std::str;
 use std::str::{FromStr, Utf8Error};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use memchr::Memchr;
 //use mio::net::*;
@@ -13,9 +11,6 @@ use memchr::Memchr;
 use byteorder::{BigEndian, WriteBytesExt};
 
 use ::constants::*;
-use ::job::*;
-use ::worker::*;
-use ::queues::*;
 
 pub struct PacketType {
     pub name: &'static str,
@@ -82,6 +77,7 @@ impl<'a> Iterator for IterPacket<'a> {
     }
 }
 
+/*
 impl<'a> IterPacket<'a> {
     /// Convenience method that makes Vecs insetad of slices
     fn next_field(&mut self) -> Result<Vec<u8>> {
@@ -91,6 +87,7 @@ impl<'a> IterPacket<'a> {
         }
     }
 }
+*/
 
 #[derive(Debug)]
 pub struct ParseError {}
@@ -410,7 +407,7 @@ impl Packet {
     }
 */
 
-    fn handle_can_do(&mut self,
+    /*fn handle_can_do(&mut self,
                      worker: &mut Worker,
                      workers: SharedWorkers,
                      remote: usize)
@@ -633,6 +630,7 @@ impl Packet {
             }
         }
     }
+    */
 
     pub fn to_byteslice(&self) -> Box<[u8]> {
         let len = 12 + self.psize;

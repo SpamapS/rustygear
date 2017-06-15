@@ -5,6 +5,8 @@ use self::wrappinghashset::{WrappingHashSet, Iter};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
+
 use ::constants::*;
 use ::packet::*;
 use job::Job;
@@ -25,7 +27,7 @@ impl WorkerSet {
 }
 
 pub struct Workers {
-    allworkers: HashMap<Vec<u8>, WorkerSet>,
+    allworkers: HashMap<Bytes, WorkerSet>,
     wakeworkers: HashSet<usize>,
 }
 
@@ -33,11 +35,11 @@ pub type SharedWorkers = Arc<Mutex<Workers>>;
 
 pub trait Wake {
     fn new_workers() -> Self;
-    fn queue_wake(&mut self, &Vec<u8>);
+    fn queue_wake(&mut self, &Bytes);
     fn do_wakes(&mut self) -> Vec<Packet>;
     fn sleep(&mut self, &mut Worker, usize);
     fn wakeup(&mut self, &mut Worker, usize);
-    fn count_workers(&mut self, &Vec<u8>) -> (usize, usize);
+    fn count_workers(&mut self, &Bytes) -> (usize, usize);
     fn shutdown(&mut self, remote: usize);
 }
 
@@ -46,7 +48,7 @@ impl Wake for SharedWorkers {
         Arc::new(Mutex::new(Workers::new()))
     }
 
-    fn queue_wake(&mut self, fname: &Vec<u8>) {
+    fn queue_wake(&mut self, fname: &Bytes) {
         let mut workers = self.lock().unwrap();
         let mut inserts = Vec::new();
         debug!("allworkers({:?}) = {:?}", fname, workers.allworkers);
@@ -123,7 +125,7 @@ impl Wake for SharedWorkers {
         }
     }
 
-    fn count_workers(&mut self, fname: &Vec<u8>) -> (usize, usize) {
+    fn count_workers(&mut self, fname: &Bytes) -> (usize, usize) {
         let workers = self.lock().unwrap();
         match workers.allworkers.get(fname) {
             None => (0, 0),
@@ -151,7 +153,7 @@ impl Workers {
 
 #[derive(Debug)]
 pub struct Worker {
-    pub functions: WrappingHashSet<Vec<u8>>,
+    pub functions: WrappingHashSet<Bytes>,
     job: Option<Arc<Job>>,
 }
 
@@ -163,15 +165,15 @@ impl Worker {
         }
     }
 
-    pub fn can_do(&mut self, fname: Vec<u8>) {
+    pub fn can_do(&mut self, fname: Bytes) {
         self.functions.insert(fname);
     }
 
-    pub fn cant_do<'b>(&mut self, fname: &'b Vec<u8>) {
+    pub fn cant_do<'b>(&mut self, fname: &'b Bytes) {
         self.functions.remove(fname);
     }
 
-    pub fn iter<'i>(&'i mut self) -> Iter<'i, Vec<u8>> {
+    pub fn iter<'i>(&'i mut self) -> Iter<'i, Bytes> {
         self.functions.iter()
     }
 
