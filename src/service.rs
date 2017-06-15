@@ -70,16 +70,17 @@ impl GearmanService {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
-        future::lazy(move || {
-                body.for_each(move |chunk| {
-                    let fname = chunk.freeze();
-                    debug!("CAN_DO fname = {:?}", fname);
-                    let mut worker = worker.lock().unwrap();
-                    worker.can_do(fname);
-                    workers.clone().wakeup(&mut worker, conn_id);
-                    Ok(())
-                });
-                Ok(Message::WithBody(PacketHeader::noop(), Body::from(BytesMut::new())))
+        body.for_each(move |chunk| {
+                let fname = chunk.freeze();
+                debug!("CAN_DO fname = {:?}", fname);
+                let mut worker = worker.lock().unwrap();
+                worker.can_do(fname);
+                workers.clone().wakeup(&mut worker, conn_id);
+                Ok(())
+            })
+            .and_then(|_| {
+                future::finished(Message::WithBody(PacketHeader::noop(),
+                                                   Body::from(BytesMut::new())))
             })
             .boxed()
     }

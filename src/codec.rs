@@ -163,7 +163,12 @@ impl Encoder for PacketCodec {
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
         debug!("Encoding {:?}", msg);
         match msg {
-            Frame::Message { message, body } => buf.extend(message.to_bytes()),
+            Frame::Message { message, body } => {
+                if body {
+                    debug!("body follows")
+                }
+                buf.extend(message.to_bytes())
+            }
             Frame::Body { chunk } => {
                 match chunk {
                     Some(chunk) => buf.extend_from_slice(&chunk[..]),
