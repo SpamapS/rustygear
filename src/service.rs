@@ -11,12 +11,21 @@ use bytes::{BufMut, BytesMut};
 use admin;
 use codec::PacketHeader;
 use packet::PacketMagic;
-use queues::SharedJobStorage;
+use queues::{HandleJobStorage, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
 use constants::*;
 
 pub type GearmanBody = Body<BytesMut, io::Error>;
 pub type GearmanMessage = Message<PacketHeader, GearmanBody>;
+
+fn new_res(ptype: u32, data: BytesMut) -> GearmanMessage {
+    Message::WithBody(PacketHeader {
+                          magic: PacketMagic::RES,
+                          ptype: ptype,
+                          psize: data.len() as u32,
+                      },
+                      Body::from(data))
+}
 
 pub struct GearmanService {
     pub conn_id: usize,
@@ -71,17 +80,44 @@ impl GearmanService {
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
         body.concat2()
-            .and_then(
-                move |fname| {
-                    let fname = fname.freeze();
-                    debug!("CAN_DO fname = {:?}", fname);
-                    let mut worker = worker.lock().unwrap();
-                    worker.can_do(fname);
-                    workers.clone().wakeup(&mut worker, conn_id);
-                    future::finished(Message::WithBody(PacketHeader::noop(),
+            .and_then(move |fname| {
+                let fname = fname.freeze();
+                debug!("CAN_DO fname = {:?}", fname);
+                let mut worker = worker.lock().unwrap();
+                worker.can_do(fname);
+                workers.clone().wakeup(&mut worker, conn_id);
+                future::finished(Message::WithBody(PacketHeader::noop(),
                                                    Body::from(BytesMut::new())))
             })
             .boxed()
+    }
+
+    fn handle_grab_job_all(&self) -> BoxFuture<GearmanMessage, io::Error> {
+        let mut queues = self.queues.clone();
+        let worker = self.worker.clone();
+        let mut worker = worker.lock().unwrap();
+        let ref mut worker = worker;
+        if queues.get_job(worker) {
+            match worker.job() {
+                Some(ref j) => {
+                    let mut data = BytesMut::with_capacity(4 + j.handle.len() + j.fname.len() +
+                                                           j.unique.len() +
+                                                           j.data.len());
+                    data.extend(&j.handle);
+                    data.put_slice(b"\0");
+                    data.extend(&j.fname);
+                    data.put_slice(b"\0");
+                    data.extend(&j.unique);
+                    data.put_slice(b"\0");
+                    // reducer not implemented
+                    data.put_slice(b"\0");
+                    data.extend(&j.data);
+                    return future::finished(new_res(JOB_ASSIGN_ALL, data)).boxed();
+                }
+                None => {}
+            }
+        };
+        future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
     }
 }
 
@@ -122,8 +158,8 @@ impl Service for GearmanService {
                     CAN_DO => self.handle_can_do(body),/*
                     CANT_DO => self.handle_cant_do(),
                     GRAB_JOB => self.handle_grab_job(),
-                    GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
-                    GRAB_JOB_ALL => self.handle_grab_job_all(),
+                    GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),*/
+                    GRAB_JOB_ALL => self.handle_grab_job_all(),/*
                     WORK_COMPLETE => self.handle_work_complete(),
                     WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
                     ECHO_REQ => self.handle_echo_req(&req),*/
