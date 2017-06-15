@@ -105,6 +105,20 @@ impl GearmanService {
             .boxed()
     }
 
+    fn handle_cant_do(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+        let worker = self.worker.clone();
+        body.concat2()
+            .and_then(move |fname| {
+                let fname = fname.freeze();
+                debug!("CANT_DO fname = {:?}", fname);
+                let mut worker = worker.lock().unwrap();
+                worker.cant_do(&fname);
+                future::finished(Message::WithBody(PacketHeader::noop(),
+                                                   Body::from(BytesMut::new())))
+            })
+            .boxed()
+    }
+
     fn handle_grab_job_all(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
@@ -222,8 +236,8 @@ impl Service for GearmanService {
                     SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, true, body),
                     SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true, body),
                     PRE_SLEEP => self.handle_pre_sleep(),
-                    CAN_DO => self.handle_can_do(body),/*
-                    CANT_DO => self.handle_cant_do(),
+                    CAN_DO => self.handle_can_do(body),
+                    CANT_DO => self.handle_cant_do(body),/*
                     GRAB_JOB => self.handle_grab_job(),
                     GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),*/
                     GRAB_JOB_ALL => self.handle_grab_job_all(body),/*
