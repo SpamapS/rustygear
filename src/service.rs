@@ -119,6 +119,13 @@ impl GearmanService {
         };
         future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
     }
+
+    fn handle_pre_sleep(&self) -> BoxFuture<GearmanMessage, io::Error> {
+        let worker = self.worker.clone();
+        let ref mut w = worker.lock().unwrap();
+        self.workers.clone().sleep(w, self.conn_id);
+        future::finished(Message::WithBody(PacketHeader::noop(), Body::from(BytesMut::new()))).boxed()
+    }
 }
 
 impl Service for GearmanService {
@@ -152,9 +159,8 @@ impl Service for GearmanService {
                     SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, false),
                     SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, true),
                     SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, true),
-                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true),
+                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true),*/
                     PRE_SLEEP => self.handle_pre_sleep(),
-                    */
                     CAN_DO => self.handle_can_do(body),/*
                     CANT_DO => self.handle_cant_do(),
                     GRAB_JOB => self.handle_grab_job(),
