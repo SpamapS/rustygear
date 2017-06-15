@@ -175,7 +175,10 @@ impl Encoder for PacketCodec {
                     None => {}
                 }
             }
-            Frame::Error { error } => return Err(error),
+            Frame::Error { error } => {
+                error!("Sending error frame. {}", error);
+                buf.extend("ERR UNKNOWN_COMMAND Unknown+server+command".bytes())
+            }
         }
         Ok(())
     }
