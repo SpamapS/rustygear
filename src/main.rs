@@ -6,10 +6,8 @@ extern crate tokio_proto;
 
 extern crate rustygear;
 
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-//use mio::tcp::*;
 use tokio_proto::TcpServer;
 
 use rustygear::queues::*;

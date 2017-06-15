@@ -27,7 +27,7 @@ impl PacketHeader {
     pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {
         let newline = buf[..].iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
-            let mut line = buf.split_to(n);
+            let line = buf.split_to(n);
             buf.split_to(1); // drop the newline itself
             let data_str = match str::from_utf8(&line[..]) {
                 Ok(s) => s,

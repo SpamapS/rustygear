@@ -1,16 +1,10 @@
-use std::sync::Arc;
-
 use tokio_proto::streaming::{Message, Body};
 use bytes::BytesMut;
-use futures::Async;
-use futures::stream::Stream;
 
 use codec::PacketHeader;
 use service::GearmanMessage;
-use queues::{HandleJobStorage, SharedJobStorage};
-use worker::{SharedWorkers, Wake, Worker};
-use job::Job;
-use constants::*;
+use queues::SharedJobStorage;
+use worker::{SharedWorkers, Wake};
 
 pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -> GearmanMessage {
     let mut response = BytesMut::with_capacity(1024 * 1024); // XXX Wild guess.

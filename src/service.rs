@@ -2,7 +2,6 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicUsize;
 
-use futures;
 use futures::{future, Future, BoxFuture};
 use tokio_proto::streaming::{Message, Body};
 use tokio_service::Service;
@@ -12,7 +11,6 @@ use bytes::{BufMut, BytesMut};
 use admin;
 use codec::PacketHeader;
 use packet::PacketMagic;
-use proto::GearmanProto;
 use queues::SharedJobStorage;
 use worker::SharedWorkers;
 use constants::*;
