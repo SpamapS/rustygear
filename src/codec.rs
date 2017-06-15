@@ -115,13 +115,6 @@ impl PacketHeader {
         }
     }
 
-    pub fn noop() -> PacketHeader {
-        PacketHeader {
-            magic: PacketMagic::TEXT,
-            ptype: ADMIN_RESPONSE,
-            psize: 0,
-        }
-    }
 }
 
 impl Decoder for PacketCodec {

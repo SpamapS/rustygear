@@ -87,6 +87,15 @@ impl GearmanService {
         }
     }
 
+    fn no_response() -> GearmanMessage {
+        Message::WithBody(PacketHeader {
+                              magic: PacketMagic::TEXT,
+                              ptype: ADMIN_RESPONSE,
+                              psize: 0,
+                          },
+                          Body::from(BytesMut::new()))
+    }
+
     fn handle_can_do(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
@@ -99,8 +108,7 @@ impl GearmanService {
                 let mut worker = worker.lock().unwrap();
                 worker.can_do(fname);
                 workers.clone().wakeup(&mut worker, conn_id);
-                future::finished(Message::WithBody(PacketHeader::noop(),
-                                                   Body::from(BytesMut::new())))
+                future::finished(Self::no_response())
             })
             .boxed()
     }
@@ -113,8 +121,7 @@ impl GearmanService {
                 debug!("CANT_DO fname = {:?}", fname);
                 let mut worker = worker.lock().unwrap();
                 worker.cant_do(&fname);
-                future::finished(Message::WithBody(PacketHeader::noop(),
-                                                   Body::from(BytesMut::new())))
+                future::finished(Self::no_response())
             })
             .boxed()
     }
@@ -157,8 +164,7 @@ impl GearmanService {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        future::finished(Message::WithBody(PacketHeader::noop(), Body::from(BytesMut::new())))
-            .boxed()
+        future::finished(Self::no_response()).boxed()
     }
 
     fn handle_submit_job(&self,
