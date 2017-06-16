@@ -160,6 +160,67 @@ impl GearmanService {
             .boxed()
     }
 
+    fn handle_grab_job_uniq(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+        let mut queues = self.queues.clone();
+        let worker = self.worker.clone();
+        trace!("handle_grab_job_uniq");
+        body.concat2()
+            .and_then(move |_| {
+                let mut worker = worker.lock().unwrap();
+                let ref mut worker = worker;
+                if queues.get_job(worker) {
+                    match worker.job() {
+                        Some(ref j) => {
+                            let mut data = BytesMut::with_capacity(3 + j.handle.len() +
+                                                                   j.fname.len() +
+                                                                   j.unique.len() +
+                                                                   j.data.len());
+                            data.extend(&j.handle);
+                            data.put_slice(b"\0");
+                            data.extend(&j.fname);
+                            data.put_slice(b"\0");
+                            data.extend(&j.unique);
+                            data.put_slice(b"\0");
+                            data.extend(&j.data);
+                            return future::finished(new_res(JOB_ASSIGN_UNIQ, data)).boxed();
+                        }
+                        None => {}
+                    }
+                };
+                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+            })
+            .boxed()
+    }
+
+    fn handle_grab_job(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+        let mut queues = self.queues.clone();
+        let worker = self.worker.clone();
+        trace!("handle_grab_job");
+        body.concat2()
+            .and_then(move |_| {
+                let mut worker = worker.lock().unwrap();
+                let ref mut worker = worker;
+                if queues.get_job(worker) {
+                    match worker.job() {
+                        Some(ref j) => {
+                            let mut data = BytesMut::with_capacity(2 + j.handle.len() +
+                                                                   j.fname.len() +
+                                                                   j.data.len());
+                            data.extend(&j.handle);
+                            data.put_slice(b"\0");
+                            data.extend(&j.fname);
+                            data.put_slice(b"\0");
+                            data.extend(&j.data);
+                            return future::finished(new_res(JOB_ASSIGN, data)).boxed();
+                        }
+                        None => {}
+                    }
+                };
+                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+            })
+            .boxed()
+    }
+
     fn handle_pre_sleep(&self) -> BoxFuture<GearmanMessage, io::Error> {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
@@ -243,9 +304,9 @@ impl Service for GearmanService {
                     SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true, body),
                     PRE_SLEEP => self.handle_pre_sleep(),
                     CAN_DO => self.handle_can_do(body),
-                    CANT_DO => self.handle_cant_do(body),/*
-                    GRAB_JOB => self.handle_grab_job(),
-                    GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),*/
+                    CANT_DO => self.handle_cant_do(body),
+                    GRAB_JOB => self.handle_grab_job(body),
+                    GRAB_JOB_UNIQ => self.handle_grab_job_uniq(body),
                     GRAB_JOB_ALL => self.handle_grab_job_all(body),/*
                     WORK_COMPLETE => self.handle_work_complete(),
                     WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
