@@ -142,13 +142,13 @@ impl GearmanService {
                                                                    j.unique.len() +
                                                                    j.data.len());
                             data.extend(&j.handle);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.fname);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.unique);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             // reducer not implemented
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.data);
                             return future::finished(new_res(JOB_ASSIGN_ALL, data)).boxed();
                         }
@@ -176,11 +176,11 @@ impl GearmanService {
                                                                    j.unique.len() +
                                                                    j.data.len());
                             data.extend(&j.handle);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.fname);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.unique);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.data);
                             return future::finished(new_res(JOB_ASSIGN_UNIQ, data)).boxed();
                         }
@@ -207,9 +207,9 @@ impl GearmanService {
                                                                    j.fname.len() +
                                                                    j.data.len());
                             data.extend(&j.handle);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.fname);
-                            data.put_slice(b"\0");
+                            data.put_u8(b'\0');
                             data.extend(&j.data);
                             return future::finished(new_res(JOB_ASSIGN, data)).boxed();
                         }
