@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -33,6 +34,7 @@ pub struct GearmanService {
     pub queues: SharedJobStorage,
     pub workers: SharedWorkers,
     pub worker: Arc<Mutex<Worker>>,
+    pub connections: Arc<Mutex<HashMap<usize, Arc<GearmanService>>>>,
     pub job_count: Arc<AtomicUsize>,
 }
 
@@ -76,6 +78,7 @@ impl GearmanService {
     pub fn new(conn_id: usize,
                queues: SharedJobStorage,
                workers: SharedWorkers,
+               connections: Arc<Mutex<HashMap<usize, Arc<GearmanService>>>>,
                job_count: Arc<AtomicUsize>)
                -> GearmanService {
         GearmanService {
@@ -83,6 +86,7 @@ impl GearmanService {
             queues: queues.clone(),
             worker: Arc::new(Mutex::new((Worker::new()))),
             workers: workers.clone(),
+            connections: connections.clone(),
             job_count: job_count.clone(),
         }
     }
