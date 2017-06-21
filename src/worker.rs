@@ -7,8 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
-use ::constants::*;
-use ::packet::*;
 use job::Job;
 
 #[derive(Debug)]
@@ -36,7 +34,7 @@ pub type SharedWorkers = Arc<Mutex<Workers>>;
 pub trait Wake {
     fn new_workers() -> Self;
     fn queue_wake(&mut self, &Bytes);
-    fn do_wakes(&mut self) -> Vec<Packet>;
+    fn wakeworkers_drain(&mut self) -> Vec<usize>;
     fn sleep(&mut self, &mut Worker, usize);
     fn wakeup(&mut self, &mut Worker, usize);
     fn count_workers(&mut self, &Bytes) -> (usize, usize);
@@ -67,13 +65,10 @@ impl Wake for SharedWorkers {
         workers.wakeworkers.extend(inserts);
     }
 
-    fn do_wakes(&mut self) -> Vec<Packet> {
+    fn wakeworkers_drain(&mut self) -> Vec<usize> {
         let mut workers = self.lock().unwrap();
-        let mut packets = Vec::with_capacity(workers.wakeworkers.len());
-        for worker in workers.wakeworkers.drain() {
-            packets.push(Packet::new_res_remote(NOOP, Box::new(Vec::new()), Some(worker)));
-        }
-        packets
+        let to_drain: Vec<usize> = workers.wakeworkers.drain().collect();
+        to_drain
     }
 
     fn sleep(&mut self, worker: &mut Worker, remote: usize) {
