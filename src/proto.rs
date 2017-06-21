@@ -1,11 +1,11 @@
 use std::io;
 
 use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::codec::Framed;
 use tokio_proto::streaming::pipeline::ServerProto;
 use bytes::BytesMut;
 
 use codec::{PacketHeader, PacketCodec};
+use transport::GearmanFramed;
 
 pub struct GearmanProto;
 
@@ -16,7 +16,7 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
     type ResponseBody = BytesMut;
     type Error = io::Error;
 
-    type Transport = Framed<T, PacketCodec>;
+    type Transport = GearmanFramed<T>;
     type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
@@ -24,6 +24,6 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
             data_todo: None,
         };
 
-        Ok(io.framed(codec))
+        Ok(GearmanFramed::<T>(io.framed(codec)))
     }
 }

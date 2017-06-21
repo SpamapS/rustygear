@@ -7,7 +7,7 @@ use futures::{Poll, Sink, StartSend, Stream};
 
 use codec::PacketCodec;
 
-pub struct GearmanFramed<T>(Framed<T, PacketCodec>);
+pub struct GearmanFramed<T>(pub Framed<T, PacketCodec>);
 
 impl<T> Transport for GearmanFramed<T>
     where T: AsyncRead + AsyncWrite + 'static
