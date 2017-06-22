@@ -21,7 +21,15 @@ pub struct PacketCodec {
     pub data_todo: Option<usize>,
 }
 
-type PacketItem = Frame<PacketHeader, BytesMut, io::Error>;
+impl PacketCodec {
+    pub fn new() -> PacketCodec {
+        PacketCodec {
+            data_todo: None
+        }
+    }
+}
+
+pub type PacketItem = Frame<PacketHeader, BytesMut, io::Error>;
 
 impl PacketHeader {
     pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {

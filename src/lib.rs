@@ -13,7 +13,7 @@ pub mod admin;
 pub mod packet;
 pub mod worker;
 pub mod queues;
-//pub mod server;
+pub mod server;
 pub mod constants;
 pub mod job;
 pub mod codec;

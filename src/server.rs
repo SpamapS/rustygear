@@ -1,300 +1,179 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::net::SocketAddr;
-use std::time::Duration;
-use std::io::Write;
-use std::io::ErrorKind::WouldBlock;
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io;
-use std::sync::atomic::AtomicUsize;
-use std::sync::Arc;
 
-use mio::*;
-use mio::tcp::*;
-use bytes::BytesMut;
+use futures::{Async, Future, Stream, Poll};
+use futures::sync::mpsc::channel;
+use futures::future;
+use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_core::reactor::Core;
+use tokio_core::net::TcpListener;
+use tokio_service::Service;
+use tokio_proto::streaming::pipeline::{advanced, ServerProto};
+use tokio_proto::streaming::{Body, Message};
 
-use ::constants::*;
-use packet::{Packet, EofError};
-use ::queues::*;
-use ::worker::*;
+use queues::{HandleJobStorage, SharedJobStorage};
+use worker::{SharedWorkers, Wake};
+use codec::{PacketCodec, PacketItem};
+use transport::GearmanFramed;
+use service::GearmanService;
+use proto::GearmanProto;
 
-struct GearmanRemote {
-    socket: TcpStream,
-    addr: SocketAddr,
-    packet: Packet,
-    queues: SharedJobStorage,
-    worker: Worker,
-    workers: SharedWorkers,
-    sendqueue: Vec<BytesMut>,
-    interest: Ready,
-    token: Token,
+pub struct GearmanServer;
+
+// Arbitrarily limit the number of waiting backchannel messages to 1024 to prevent a dead client
+// from using up all memory.
+const BACKCHANNEL_BUFFER_SIZE: usize = 1024;
+
+struct Dispatch<S, T, P>
+    where T: 'static,
+          P: ServerProto<T>,
+          S: Service
+{
+    service: S,
+    transport: P::Transport,
+    in_flight: VecDeque<InFlight<S::Future>>,
 }
 
-pub struct GearmanServer {
-    pub socket: TcpListener,
-    remotes: HashMap<Token, GearmanRemote>,
-    token_counter: usize,
-    queues: SharedJobStorage,
-    workers: SharedWorkers,
-    job_count: AtomicUsize,
+enum InFlight<F: Future> {
+    Active(F),
+    Done(Result<F::Item, F::Error>),
 }
 
-
-const SERVER_TOKEN: Token = Token(0);
-
-impl GearmanRemote {
-    pub fn new(socket: TcpStream,
-               addr: SocketAddr,
-               queues: SharedJobStorage,
-               token: Token,
-               workers: SharedWorkers)
-               -> GearmanRemote {
-        GearmanRemote {
-            socket: socket,
-            addr: addr,
-            packet: Packet::new(token),
-            queues: queues,
-            worker: Worker::new(),
-            workers: workers,
-            sendqueue: Vec::with_capacity(2), // Don't need many bufs
-            interest: Ready::readable(),
-            token: token,
+impl<S, T, P> Dispatch<S, T, P>
+    where T: 'static,
+          P: ServerProto<T>,
+          S: Service
+{
+    pub fn new(service: S, transport: P::Transport) -> Dispatch<S, T, P> {
+        Dispatch {
+            service: service,
+            transport: transport,
+            in_flight: VecDeque::with_capacity(32),
         }
     }
 
-    pub fn queue_packet(&mut self, packet: &Packet) {
-        info!("{} Queueing {:?}", self, &packet);
-        //self.sendqueue.push(BytesMut::from_slice(&packet.to_byteslice()));
-        self.interest.remove(Ready::readable());
-        self.interest.insert(Ready::writable());
+    pub fn send_response(&mut self, response: S::Future) {
+        self.in_flight.push_back(InFlight::Active(response));
+    }
+}
+
+impl<P, T, B, S> advanced::Dispatch for Dispatch<S, T, P>
+    where P: ServerProto<T>,
+          T: 'static,
+          B: Stream<Item = P::ResponseBody, Error = P::Error>,
+          S: Service<Request = Message<P::Request, Body<P::RequestBody, P::Error>>,
+                     Response = Message<P::Response, B>,
+                     Error = P::Error>
+{
+    type Io = T;
+    type In = P::Response;
+    type BodyIn = P::ResponseBody;
+    type Out = P::Request;
+    type BodyOut = P::RequestBody;
+    type Error = P::Error;
+    type Stream = B;
+    type Transport = P::Transport;
+
+    fn transport(&mut self) -> &mut P::Transport {
+        &mut self.transport
     }
 
-    pub fn read(&mut self, job_count: Arc<&AtomicUsize>) -> Result<Option<Vec<Packet>>, EofError> {
-        let mut ret = Ok(None);
-        debug!("{} readable", self);
-        match self.packet
-            .from_socket(&mut self.socket,
-                         &mut self.worker,
-                         self.workers.clone(),
-                         self.queues.clone(),
-                         self.token,
-                         job_count)? {
-            None => debug!("{} Done reading", self),
-            Some(p) => {
-                ret = Ok(Some(p));
-            }
+    fn dispatch(&mut self,
+                request: advanced::PipelineMessage<Self::Out,
+                                                   Body<Self::BodyOut, Self::Error>,
+                                                   Self::Error>)
+                -> io::Result<()> {
+        if let Ok(request) = request {
+            let response = self.service.call(request);
+            self.in_flight.push_back(InFlight::Active(response));
         }
-        info!("{} Processed {:?}", &self, &self.packet);
-        // Non-text packets are consumed, reset
-        if self.packet.consumed {
-            self.packet = Packet::new(self.token);
-        }
-        ret
-    }
-
-    pub fn write(&mut self) -> Result<(), io::Error> {
-        debug!("{} writable", self);
-        while !self.sendqueue.is_empty() {
-            /*if !self.sendqueue.first().unwrap().has_remaining() {
-                self.sendqueue.pop();
-                continue;
-            }
-            */
-            let buf = self.sendqueue.first_mut().unwrap();
-            match self.socket.write(&buf) {
-                Ok(value) => {
-                    buf.split_to(value);
-                    continue;
-                }
-                Err(err) => {
-                    if let WouldBlock = err.kind() {
-                        break;
-                    } else {
-                        return Err(err);
-                    }
-                }
-            };
-        }
-        if self.sendqueue.is_empty() {
-            self.interest.remove(Ready::writable());
-            self.interest.insert(Ready::readable());
-        };
         Ok(())
     }
 
-    pub fn shutdown(mut self) {
-        match self.worker.job() {
-            Some(ref mut j) => {
-                self.queues.clone().add_job(j.clone(), PRIORITY_NORMAL, None);
+    fn poll
+        (&mut self)
+         -> Poll<Option<advanced::PipelineMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
+        for slot in self.in_flight.iter_mut() {
+            slot.poll();
+        }
+
+        match self.in_flight.front() {
+            Some(&InFlight::Done(_)) => {}
+            _ => return Ok(Async::NotReady),
+        }
+
+        match self.in_flight.pop_front() {
+            Some(InFlight::Done(res)) => Ok(Async::Ready(Some(res))),
+            _ => panic!(),
+        }
+    }
+
+    fn has_in_flight(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+}
+
+impl<F: Future> InFlight<F> {
+    fn poll(&mut self) {
+        let res = match *self {
+            InFlight::Active(ref mut f) => {
+                match f.poll() {
+                    Ok(Async::Ready(e)) => Ok(e),
+                    Err(e) => Err(e),
+                    Ok(Async::NotReady) => return,
+                }
             }
-            None => {}
+            _ => return,
         };
-        self.workers.shutdown(&self.token);
-        match self.socket.shutdown(Shutdown::Both) {
-            Err(e) => warn!("{:?} fail on shutdown ({:?})", self.addr, e),
-            Ok(_) => {}
-        }
+        *self = InFlight::Done(res);
     }
 }
 
-impl fmt::Display for GearmanRemote {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "Remote {{ addr: {:?} token: {:?} }}",
-               self.addr,
-               self.token)
-    }
-}
 
 impl GearmanServer {
-    pub fn new(server_socket: TcpListener,
-               queues: SharedJobStorage,
-               workers: SharedWorkers,
-               job_count: AtomicUsize)
-               -> GearmanServer {
-        GearmanServer {
-            token_counter: 1,
-            remotes: HashMap::new(),
-            socket: server_socket,
-            queues: queues,
-            workers: workers,
-            job_count: job_count,
-        }
-    }
-}
+    pub fn run<T: AsyncRead + AsyncWrite + 'static>(listener: TcpListener)
+    {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
+        let curr_conn_id = AtomicUsize::new(0);
+        let queues = SharedJobStorage::new_job_storage();
+        let workers = SharedWorkers::new_workers();
+        let job_count = Arc::new(AtomicUsize::new(0));
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        let server = listener.incoming().for_each(|(socket, _)| {
+            let transport = GearmanFramed(socket.framed(PacketCodec::new()));
+            let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
+            let service =
+                GearmanService::new(conn_id, queues.clone(), workers.clone(), job_count.clone());
+            // Create backchannel for sending packets to other connections
+            let (tx, rx) =
+                channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
 
-impl GearmanServer {
-    pub fn poll(&mut self) {
-        let mut poll = Poll::new().unwrap();
-        poll.register(&self.socket, Token(0), Ready::readable(), PollOpt::edge())
-            .unwrap();
-        let mut pevents = Events::with_capacity(1024);
-        loop {
-            poll.poll(&mut pevents, Some(Duration::from_millis(1000))).unwrap();
-            for event in pevents.iter() {
-                self.poll_inner(&mut poll, &event)
+            {
+                let mut connections = connections.lock().unwrap();
+                connections.insert(conn_id, tx.clone());
             }
-        }
-    }
-
-    fn poll_inner(&mut self, poll: &mut Poll, event: &Event) {
-        if event.kind().is_readable() {
-            match event.token() {
-                SERVER_TOKEN => {
-                    let (remote_socket, remote_addr) = match self.socket.accept() {
-                        Err(e) => {
-                            error!("Accept error: {}", e);
-                            return;
-                        }
-                        Ok((sock, addr)) => (sock, addr),
-                    };
-
-                    self.token_counter += 1;
-                    let new_token = Token(self.token_counter);
-
-                    self.remotes.insert(new_token,
-                                        GearmanRemote::new(remote_socket,
-                                                           remote_addr,
-                                                           self.queues.clone(),
-                                                           new_token,
-                                                           self.workers.clone()));
-
-                    poll.register(&self.remotes[&new_token].socket,
-                                  new_token,
-                                  Ready::readable(),
-                                  PollOpt::edge() | PollOpt::oneshot())
-                        .unwrap();
+            let dispatch: Dispatch<GearmanService, GearmanFramed<T>, GearmanProto> =
+                Dispatch::new(service, transport);
+            let backchannel = rx.for_each(|message| {
+                dispatch.send_response(future::finished(message).boxed());
+                Ok(())
+            });
+            let pipeline = advanced::Pipeline::new(dispatch);
+            /*
+            let responder = pipeline.select(backchannel).then(|res| {
+                match res {
+                    Ok(_) => debug!("OK!"),
+                    Err(e) => error!("Error! {:?}", e),
                 }
-                token => {
-                    let mut shutdown = false;
-                    {
-                        let mut other_packets = Vec::new();
-                        {
-                            let mut remote = self.remotes.get_mut(&token).unwrap();
-                            let job_count = Arc::new(&self.job_count);
-                            match remote.read(job_count) {
-                                Ok(sp) => {
-                                    match sp {
-                                        Some(packets) => {
-                                            for p in packets.into_iter() {
-                                                match p.remote {
-                                                    None => remote.queue_packet(&p), // for us
-                                                    Some(t) => {
-                                                        if t == token {
-                                                            // Packet is also meant for us
-                                                            remote.queue_packet(&p);
-                                                        } else {
-                                                            // Packet is for a different remote
-                                                            other_packets.push(p);
-                                                        }
-                                                    }
-                                                };
-                                            }
-                                        }
-                                        None => {}
-                                    }
-                                    other_packets.extend(self.workers.do_wakes());
-                                    poll.reregister(&remote.socket,
-                                                    token,
-                                                    remote.interest,
-                                                    PollOpt::edge() | PollOpt::oneshot())
-                                        .unwrap();
-                                }
-                                Err(e) => {
-                                    info!("{} hung up: {:?}", &remote, &e);
-                                    shutdown = true;
-                                }
-                            }
-                        }
-                        for p in other_packets {
-                            let t = p.remote.unwrap();
-                            match self.remotes.get_mut(&t) {
-                                None => warn!("No remote for packet, dropping: {:?}", &p),
-                                Some(mut remote) => {
-                                    remote.queue_packet(&p);
-                                    poll.reregister(&remote.socket,
-                                                    t,
-                                                    remote.interest,
-                                                    PollOpt::edge() | PollOpt::oneshot())
-                                        .unwrap();
-                                }
-                            }
-                        }
-                    }
-                    if shutdown {
-                        let remote = self.remotes.remove(&token).unwrap();
-                        remote.shutdown();
-                    }
-                }
-            }
-        }
-
-        if event.kind().is_writable() {
-            match event.token() {
-                SERVER_TOKEN => panic!("Received writable event for server socket."),
-                token => {
-                    let mut shutdown = false;
-                    {
-                        let mut remote = self.remotes.get_mut(&token).unwrap();
-                        match remote.write() {
-                            Ok(_) => {
-                                poll.reregister(&remote.socket,
-                                                token,
-                                                remote.interest,
-                                                PollOpt::edge() | PollOpt::oneshot())
-                                    .unwrap()
-                            }
-                            Err(e) => {
-                                info!("remote({}) hung up: {}", &remote, e);
-                                shutdown = true;
-                            }
-                        }
-                    }
-                    if shutdown {
-                        let remote = self.remotes.remove(&token).unwrap();
-                        remote.shutdown();
-                    }
-                }
-            }
-        }
+                Ok(())
+            });
+            */
+            handle.spawn(pipeline.map_err(|_| ()));
+            Ok(())
+        });
+        core.run(server).unwrap();
     }
 }
