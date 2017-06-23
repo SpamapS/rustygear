@@ -3,6 +3,7 @@ extern crate log;
 extern crate env_logger;
 
 extern crate rustygear;
+extern crate tokio_core;
 
 
 use rustygear::server::GearmanServer;
@@ -16,6 +17,5 @@ fn main() {
 
     info!("Binding to 0.0.0.0:4730");
     let address = "0.0.0.0:4730".parse().unwrap();
-    let server = GearmanServer::new(address);
-    server.run();
+    GearmanServer::run(address);
 }

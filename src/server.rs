@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io;
@@ -11,13 +12,13 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
 use tokio_proto::streaming::pipeline::{advanced, ServerProto};
-use tokio_proto::streaming::{Body, Message};
+use tokio_proto::streaming::Body;
 
 use queues::{HandleJobStorage, SharedJobStorage};
 use worker::{SharedWorkers, Wake};
-use codec::{PacketCodec, PacketItem};
+use codec::PacketCodec;
 use transport::GearmanFramed;
-use service::GearmanService;
+use service::{GearmanBody, GearmanService};
 use proto::GearmanProto;
 
 pub struct GearmanServer;
@@ -26,14 +27,12 @@ pub struct GearmanServer;
 // from using up all memory.
 const BACKCHANNEL_BUFFER_SIZE: usize = 1024;
 
-struct Dispatch<S, T, P>
-    where T: 'static,
-          P: ServerProto<T>,
-          S: Service
+struct Dispatch<T>
+    where T: AsyncRead + AsyncWrite + 'static,
 {
-    service: S,
-    transport: P::Transport,
-    in_flight: VecDeque<InFlight<S::Future>>,
+    service: GearmanService,
+    transport: <GearmanProto as ServerProto<T>>::Transport,
+    in_flight: Arc<Mutex<VecDeque<InFlight<<GearmanService as Service>::Future>>>>,
 }
 
 enum InFlight<F: Future> {
@@ -41,42 +40,33 @@ enum InFlight<F: Future> {
     Done(Result<F::Item, F::Error>),
 }
 
-impl<S, T, P> Dispatch<S, T, P>
-    where T: 'static,
-          P: ServerProto<T>,
-          S: Service
+impl<T> Dispatch<T>
+    where T: AsyncRead + AsyncWrite + 'static
 {
-    pub fn new(service: S, transport: P::Transport) -> Dispatch<S, T, P> {
+    pub fn new(service: GearmanService,
+               transport: <GearmanProto as ServerProto<T>>::Transport,
+               in_flight: Arc<Mutex<VecDeque<InFlight<<GearmanService as Service>::Future>>>>) -> Dispatch<T> {
         Dispatch {
             service: service,
             transport: transport,
-            in_flight: VecDeque::with_capacity(32),
+            in_flight: in_flight,
         }
-    }
-
-    pub fn send_response(&mut self, response: S::Future) {
-        self.in_flight.push_back(InFlight::Active(response));
     }
 }
 
-impl<P, T, B, S> advanced::Dispatch for Dispatch<S, T, P>
-    where P: ServerProto<T>,
-          T: 'static,
-          B: Stream<Item = P::ResponseBody, Error = P::Error>,
-          S: Service<Request = Message<P::Request, Body<P::RequestBody, P::Error>>,
-                     Response = Message<P::Response, B>,
-                     Error = P::Error>
+impl<T> advanced::Dispatch for Dispatch<T>
+    where T: AsyncRead + AsyncWrite + 'static
 {
     type Io = T;
-    type In = P::Response;
-    type BodyIn = P::ResponseBody;
-    type Out = P::Request;
-    type BodyOut = P::RequestBody;
-    type Error = P::Error;
-    type Stream = B;
-    type Transport = P::Transport;
+    type In = <GearmanProto as ServerProto<T>>::Response;
+    type BodyIn = <GearmanProto as ServerProto<T>>::ResponseBody;
+    type Out = <GearmanProto as ServerProto<T>>::Request;
+    type BodyOut = <GearmanProto as ServerProto<T>>::RequestBody;
+    type Error = <GearmanProto as ServerProto<T>>::Error;
+    type Stream = GearmanBody;
+    type Transport = <GearmanProto as ServerProto<T>>::Transport;
 
-    fn transport(&mut self) -> &mut P::Transport {
+    fn transport(&mut self) -> &mut <GearmanProto as ServerProto<T>>::Transport {
         &mut self.transport
     }
 
@@ -87,7 +77,8 @@ impl<P, T, B, S> advanced::Dispatch for Dispatch<S, T, P>
                 -> io::Result<()> {
         if let Ok(request) = request {
             let response = self.service.call(request);
-            self.in_flight.push_back(InFlight::Active(response));
+            let mut in_flight = self.in_flight.lock().unwrap();
+            in_flight.push_back(InFlight::Active(response));
         }
         Ok(())
     }
@@ -95,23 +86,25 @@ impl<P, T, B, S> advanced::Dispatch for Dispatch<S, T, P>
     fn poll
         (&mut self)
          -> Poll<Option<advanced::PipelineMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
-        for slot in self.in_flight.iter_mut() {
+        let mut in_flight = self.in_flight.lock().unwrap();
+        for slot in in_flight.iter_mut() {
             slot.poll();
         }
 
-        match self.in_flight.front() {
+        match in_flight.front() {
             Some(&InFlight::Done(_)) => {}
             _ => return Ok(Async::NotReady),
         }
 
-        match self.in_flight.pop_front() {
+        match in_flight.pop_front() {
             Some(InFlight::Done(res)) => Ok(Async::Ready(Some(res))),
             _ => panic!(),
         }
     }
 
     fn has_in_flight(&self) -> bool {
-        !self.in_flight.is_empty()
+        let in_flight = self.in_flight.lock().unwrap();
+        !in_flight.is_empty()
     }
 }
 
@@ -133,10 +126,10 @@ impl<F: Future> InFlight<F> {
 
 
 impl GearmanServer {
-    pub fn run<T: AsyncRead + AsyncWrite + 'static>(listener: TcpListener)
-    {
+    pub fn run(addr: SocketAddr) {
         let mut core = Core::new().unwrap();
         let handle = core.handle();
+        let listener = TcpListener::bind(&addr, &handle).unwrap();
         let curr_conn_id = AtomicUsize::new(0);
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
@@ -155,10 +148,11 @@ impl GearmanServer {
                 let mut connections = connections.lock().unwrap();
                 connections.insert(conn_id, tx.clone());
             }
-            let dispatch: Dispatch<GearmanService, GearmanFramed<T>, GearmanProto> =
-                Dispatch::new(service, transport);
+            let in_flight = Arc::new(Mutex::new(VecDeque::with_capacity(32)));
+            let dispatch = Dispatch::new(service, transport, in_flight.clone());
             let backchannel = rx.for_each(|message| {
-                dispatch.send_response(future::finished(message).boxed());
+                let mut in_flight = in_flight.lock().unwrap();
+                in_flight.push_back(InFlight::Active(future::finished(message).boxed()));
                 Ok(())
             });
             let pipeline = advanced::Pipeline::new(dispatch);
