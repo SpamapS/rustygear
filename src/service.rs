@@ -15,6 +15,7 @@ use job::Job;
 use packet::PacketMagic;
 use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
+use server::BackchannelSender;
 use constants::*;
 
 pub type GearmanBody = Body<BytesMut, io::Error>;
@@ -35,6 +36,7 @@ pub struct GearmanService {
     pub workers: SharedWorkers,
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
+    pub connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>,
 }
 
 fn next_field(buf: &mut BytesMut) -> Result<Bytes, io::Error> {
@@ -77,7 +79,8 @@ impl GearmanService {
     pub fn new(conn_id: usize,
                queues: SharedJobStorage,
                workers: SharedWorkers,
-               job_count: Arc<AtomicUsize>)
+               job_count: Arc<AtomicUsize>,
+               connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>)
                -> GearmanService {
         GearmanService {
             conn_id: conn_id,
@@ -85,6 +88,7 @@ impl GearmanService {
             worker: Arc::new(Mutex::new((Worker::new()))),
             workers: workers.clone(),
             job_count: job_count.clone(),
+            connections: connections.clone(),
         }
     }
 

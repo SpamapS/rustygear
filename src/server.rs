@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io;
 
 use futures::{Async, Future, Stream, Poll};
-use futures::sync::mpsc::channel;
+use futures::sync::mpsc::{Sender, channel};
 use futures::future;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Core;
@@ -124,6 +124,7 @@ impl<F: Future> InFlight<F> {
     }
 }
 
+pub type BackchannelSender = Sender<<GearmanService as Service>::Response>;
 
 impl GearmanServer {
     pub fn run(addr: SocketAddr) {
@@ -139,7 +140,7 @@ impl GearmanServer {
             let transport = GearmanFramed(socket.framed(PacketCodec::new()));
             let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
             let service =
-                GearmanService::new(conn_id, queues.clone(), workers.clone(), job_count.clone());
+                GearmanService::new(conn_id, queues.clone(), workers.clone(), job_count.clone(), connections.clone());
             // Create backchannel for sending packets to other connections
             let (tx, rx) =
                 channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
@@ -150,11 +151,12 @@ impl GearmanServer {
             }
             let in_flight = Arc::new(Mutex::new(VecDeque::with_capacity(32)));
             let dispatch = Dispatch::new(service, transport, in_flight.clone());
-            let backchannel = rx.for_each(|message| {
+            let backchannel = rx.for_each(move |message| {
                 let mut in_flight = in_flight.lock().unwrap();
                 in_flight.push_back(InFlight::Active(future::finished(message).boxed()));
                 Ok(())
             });
+            handle.spawn(backchannel);
             let pipeline = advanced::Pipeline::new(dispatch);
             /*
             let responder = pipeline.select(backchannel).then(|res| {

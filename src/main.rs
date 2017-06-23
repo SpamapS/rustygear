@@ -7,10 +7,6 @@ extern crate tokio_core;
 
 
 use rustygear::server::GearmanServer;
-use rustygear::queues::*;
-use rustygear::worker::*;
-use rustygear::proto::GearmanProto;
-use rustygear::service::GearmanService;
 
 fn main() {
     env_logger::init().unwrap();
