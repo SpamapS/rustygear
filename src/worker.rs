@@ -33,7 +33,7 @@ pub type SharedWorkers = Arc<Mutex<Workers>>;
 
 pub trait Wake {
     fn new_workers() -> Self;
-    fn queue_wake(&mut self, &Bytes);
+    fn queue_wake(&mut self, &Bytes) -> Vec<usize>;
     fn wakeworkers_drain(&mut self) -> Vec<usize>;
     fn sleep(&mut self, &mut Worker, usize);
     fn wakeup(&mut self, &mut Worker, usize);
@@ -46,23 +46,19 @@ impl Wake for SharedWorkers {
         Arc::new(Mutex::new(Workers::new()))
     }
 
-    fn queue_wake(&mut self, fname: &Bytes) {
+    fn queue_wake(&mut self, fname: &Bytes) -> Vec<usize> {
         let mut workers = self.lock().unwrap();
-        let mut inserts = Vec::new();
         debug!("allworkers({:?}) = {:?}", fname, workers.allworkers);
         match workers.allworkers.get_mut(fname) {
-            None => {}
+            None => Vec::new(),
             Some(workerset) => {
                 // Copy the contents into active
                 workerset.active.extend(workerset.inactive.iter());
+                info!("Waking up inactive workers: {:?}", &workerset.inactive);
                 // Empty the contents into inserts
-                for worker in workerset.inactive.drain() {
-                    inserts.push(worker.clone());
-                }
+                workerset.inactive.drain().collect()
             }
         }
-        debug!("Queueing inserts {:?}", inserts);
-        workers.wakeworkers.extend(inserts);
     }
 
     fn wakeworkers_drain(&mut self) -> Vec<usize> {

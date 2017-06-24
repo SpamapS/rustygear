@@ -124,7 +124,8 @@ impl<F: Future> InFlight<F> {
     }
 }
 
-pub type BackchannelSender = Sender<<GearmanService as Service>::Response>;
+pub type BackchannelSender =
+    Sender<<GearmanService as Service>::Response>;
 
 impl GearmanServer {
     pub fn run(addr: SocketAddr) {
@@ -136,11 +137,17 @@ impl GearmanServer {
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let connections = Arc::new(Mutex::new(HashMap::new()));
+        let remote = core.remote();
+        let service_remote = remote.clone();
         let server = listener.incoming().for_each(|(socket, _)| {
             let transport = GearmanFramed(socket.framed(PacketCodec::new()));
             let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
-            let service =
-                GearmanService::new(conn_id, queues.clone(), workers.clone(), job_count.clone(), connections.clone());
+            let service = GearmanService::new(conn_id,
+                                              queues.clone(),
+                                              workers.clone(),
+                                              job_count.clone(),
+                                              connections.clone(),
+                                              service_remote.clone());
             // Create backchannel for sending packets to other connections
             let (tx, rx) =
                 channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
@@ -158,15 +165,6 @@ impl GearmanServer {
             });
             handle.spawn(backchannel);
             let pipeline = advanced::Pipeline::new(dispatch);
-            /*
-            let responder = pipeline.select(backchannel).then(|res| {
-                match res {
-                    Ok(_) => debug!("OK!"),
-                    Err(e) => error!("Error! {:?}", e),
-                }
-                Ok(())
-            });
-            */
             handle.spawn(pipeline.map_err(|_| ()));
             Ok(())
         });

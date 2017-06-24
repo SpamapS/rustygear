@@ -3,7 +3,8 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::{future, Future, BoxFuture, Stream};
+use futures::{future, Future, BoxFuture, Stream, Sink};
+use tokio_core::reactor::Remote;
 use tokio_proto::streaming::{Message, Body};
 use tokio_service::Service;
 
@@ -30,6 +31,10 @@ fn new_res(ptype: u32, data: BytesMut) -> GearmanMessage {
                       Body::from(data))
 }
 
+pub fn new_wake() -> GearmanMessage {
+    new_res(NOOP, BytesMut::new())
+}
+
 pub struct GearmanService {
     pub conn_id: usize,
     pub queues: SharedJobStorage,
@@ -37,6 +42,7 @@ pub struct GearmanService {
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
     pub connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>,
+    remote: Remote,
 }
 
 fn next_field(buf: &mut BytesMut) -> Result<Bytes, io::Error> {
@@ -80,7 +86,8 @@ impl GearmanService {
                queues: SharedJobStorage,
                workers: SharedWorkers,
                job_count: Arc<AtomicUsize>,
-               connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>)
+               connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>,
+               remote: Remote)
                -> GearmanService {
         GearmanService {
             conn_id: conn_id,
@@ -89,6 +96,7 @@ impl GearmanService {
             workers: workers.clone(),
             job_count: job_count.clone(),
             connections: connections.clone(),
+            remote: remote,
         }
     }
 
@@ -245,8 +253,11 @@ impl GearmanService {
         };
         let mut workers = self.workers.clone();
         let job_count = self.job_count.clone();
+        let connections = self.connections.clone();
+        //let wakes: Vec<sink::Send<BackchannelSender>> = Vec::new();
+        let remote = self.remote.clone();
 
-        body.concat2()
+        let ret = body.concat2()
             .and_then(move |mut fields| {
                 let fname = next_field(&mut fields).unwrap();
                 let unique = next_field(&mut fields).unwrap();
@@ -255,7 +266,32 @@ impl GearmanService {
                 let handle = match queues.coalesce_unique(&unique, conn_id) {
                     Some(handle) => handle,
                     None => {
-                        workers.queue_wake(&fname);
+                        {
+                            let mut connections = connections.lock().unwrap();
+                            for wake in workers.queue_wake(&fname) {
+                                match connections.get_mut(&wake) {
+                                    None => {
+                                        debug!("No connection found to wake up for conn_id = {}",
+                                               wake);
+                                    }
+                                    Some(tx) => {
+                                        let tx = tx.clone();
+                                        //let fut = tx.send(new_wake());
+                                        //wakes.push(move |_| {fut});
+                                        remote.spawn(move |handle| {
+                                            handle.spawn(tx.send(new_wake()).then(|res|{
+                                                match res {
+                                                    Ok(_) => {},
+                                                    Err(e) => error!("Send Error! {:?}", e),
+                                                }
+                                                Ok(())
+                                            }));
+                                            Ok(())
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         // H:091234567890
                         let mut handle = BytesMut::with_capacity(12);
                         let job_num = job_count.fetch_add(1, Ordering::Relaxed);
@@ -272,7 +308,8 @@ impl GearmanService {
                 }
                 future::finished(new_res(JOB_CREATED, BytesMut::from(handle)))
             })
-            .boxed()
+            .boxed();
+        ret
     }
 }
 
