@@ -1,4 +1,5 @@
 use std::cmp::min;
+use std::fmt;
 use std::io;
 use std::str;
 
@@ -10,11 +11,28 @@ use tokio_proto::streaming::pipeline::Frame;
 use constants::*;
 use packet::{PacketMagic, PTYPES};
 
-#[derive(Debug)]
 pub struct PacketHeader {
     pub magic: PacketMagic,
     pub ptype: u32,
     pub psize: u32,
+}
+
+impl fmt::Debug for PacketHeader {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f,
+               "PacketHeader {{ magic: {:?}, ptype: {}, size: {} }}",
+               match self.magic {
+                   PacketMagic::REQ => "REQ",
+                   PacketMagic::RES => "RES",
+                   PacketMagic::TEXT => "TEXT",
+                   _ => "UNKNOWN",
+               },
+               match self.ptype {
+                   p @ 0...42 => PTYPES[p as usize].name,
+                   _ => "__UNIMPLEMENTED__",
+               },
+               self.psize)
+    }
 }
 
 pub struct PacketCodec {
@@ -23,9 +41,7 @@ pub struct PacketCodec {
 
 impl PacketCodec {
     pub fn new() -> PacketCodec {
-        PacketCodec {
-            data_todo: None
-        }
+        PacketCodec { data_todo: None }
     }
 }
 
@@ -122,7 +138,6 @@ impl PacketHeader {
             psize: body.len() as u32,
         }
     }
-
 }
 
 impl Decoder for PacketCodec {

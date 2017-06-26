@@ -160,6 +160,7 @@ impl GearmanServer {
             let dispatch = Dispatch::new(service, transport, in_flight.clone());
             let backchannel = rx.for_each(move |message| {
                 let mut in_flight = in_flight.lock().unwrap();
+                debug!("Got backchannel for {}: {:?}", conn_id, message);
                 in_flight.push_back(InFlight::Active(future::finished(message).boxed()));
                 Ok(())
             });
