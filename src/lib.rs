@@ -17,6 +17,5 @@ pub mod server;
 pub mod constants;
 pub mod job;
 pub mod codec;
-pub mod proto;
 pub mod service;
 pub mod transport;

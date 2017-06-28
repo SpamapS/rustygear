@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io;
 
+use bytes::BytesMut;
 use futures::{Async, Future, Stream, Poll};
 use futures::sync::mpsc::{Sender, channel};
 use futures::future;
@@ -11,15 +12,19 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
-use tokio_proto::streaming::multiplex::{advanced, RequestId, ServerProto};
+use tokio_proto::streaming::multiplex::{advanced, RequestId};
 use tokio_proto::streaming::Body;
 
 use queues::{HandleJobStorage, SharedJobStorage};
 use worker::{SharedWorkers, Wake};
-use codec::PacketCodec;
+use codec::{PacketCodec, PacketHeader};
 use transport::GearmanFramed;
 use service::{GearmanBody, GearmanService};
-use proto::GearmanProto;
+
+type Request = PacketHeader;
+type RequestBody = BytesMut;
+type Response = PacketHeader;
+type ResponseBody = BytesMut;
 
 pub struct GearmanServer;
 
@@ -32,7 +37,7 @@ struct Dispatch<T>
     where T: AsyncRead + AsyncWrite + 'static,
 {
     service: GearmanService,
-    transport: <GearmanProto as ServerProto<T>>::Transport,
+    transport: GearmanFramed<T>,
     in_flight: Arc<Mutex<Vec<(RequestId, InFlight<<GearmanService as Service>::Future>)>>>,
 }
 
@@ -45,7 +50,7 @@ impl<T> Dispatch<T>
     where T: AsyncRead + AsyncWrite + 'static
 {
     pub fn new(service: GearmanService,
-               transport: <GearmanProto as ServerProto<T>>::Transport,
+               transport: GearmanFramed<T>,
                in_flight: Arc<Mutex<Vec<(RequestId, InFlight<<GearmanService as Service>::Future>)>>>) -> Dispatch<T> {
         Dispatch {
             service: service,
@@ -59,15 +64,15 @@ impl<T> advanced::Dispatch for Dispatch<T>
     where T: AsyncRead + AsyncWrite + 'static
 {
     type Io = T;
-    type In = <GearmanProto as ServerProto<T>>::Response;
-    type BodyIn = <GearmanProto as ServerProto<T>>::ResponseBody;
-    type Out = <GearmanProto as ServerProto<T>>::Request;
-    type BodyOut = <GearmanProto as ServerProto<T>>::RequestBody;
-    type Error = <GearmanProto as ServerProto<T>>::Error;
+    type In = Response;
+    type BodyIn = ResponseBody;
+    type Out = Request;
+    type BodyOut = RequestBody;
+    type Error = io::Error;
     type Stream = GearmanBody;
-    type Transport = <GearmanProto as ServerProto<T>>::Transport;
+    type Transport = GearmanFramed<T>;
 
-    fn transport(&mut self) -> &mut <GearmanProto as ServerProto<T>>::Transport {
+    fn transport(&mut self) -> &mut GearmanFramed<T> {
         &mut self.transport
     }
 
