@@ -2,22 +2,23 @@ use std::io;
 
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Framed, Encoder, Decoder};
-use tokio_proto::streaming::pipeline::Transport;
+use tokio_proto::streaming::multiplex::{RequestId, Transport};
 use futures::{Poll, Sink, StartSend, Stream};
 
 use codec::PacketCodec;
 
 pub struct GearmanFramed<T>(pub Framed<T, PacketCodec>);
 
-impl<T> Transport for GearmanFramed<T>
+impl<T, ReadBody> Transport<ReadBody> for GearmanFramed<T>
     where T: AsyncRead + AsyncWrite + 'static
 {
     fn tick(&mut self) {
         trace!("tick!");
     }
 
-    fn cancel(&mut self) -> io::Result<()> {
+    fn cancel(&mut self, request_id: RequestId) -> io::Result<()> {
         trace!("cancel!");
+        drop(request_id);
         Ok(())
     }
 }

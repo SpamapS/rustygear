@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -11,7 +11,7 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
-use tokio_proto::streaming::pipeline::{advanced, ServerProto};
+use tokio_proto::streaming::multiplex::{advanced, RequestId, ServerProto};
 use tokio_proto::streaming::Body;
 
 use queues::{HandleJobStorage, SharedJobStorage};
@@ -26,13 +26,14 @@ pub struct GearmanServer;
 // Arbitrarily limit the number of waiting backchannel messages to 1024 to prevent a dead client
 // from using up all memory.
 const BACKCHANNEL_BUFFER_SIZE: usize = 1024;
+const MAX_IN_FLIGHT_REQUESTS: usize = 32;
 
 struct Dispatch<T>
     where T: AsyncRead + AsyncWrite + 'static,
 {
     service: GearmanService,
     transport: <GearmanProto as ServerProto<T>>::Transport,
-    in_flight: Arc<Mutex<VecDeque<InFlight<<GearmanService as Service>::Future>>>>,
+    in_flight: Arc<Mutex<Vec<(RequestId, InFlight<<GearmanService as Service>::Future>)>>>,
 }
 
 enum InFlight<F: Future> {
@@ -45,7 +46,7 @@ impl<T> Dispatch<T>
 {
     pub fn new(service: GearmanService,
                transport: <GearmanProto as ServerProto<T>>::Transport,
-               in_flight: Arc<Mutex<VecDeque<InFlight<<GearmanService as Service>::Future>>>>) -> Dispatch<T> {
+               in_flight: Arc<Mutex<Vec<(RequestId, InFlight<<GearmanService as Service>::Future>)>>>) -> Dispatch<T> {
         Dispatch {
             service: service,
             transport: transport,
@@ -71,56 +72,95 @@ impl<T> advanced::Dispatch for Dispatch<T>
     }
 
     fn dispatch(&mut self,
-                request: advanced::PipelineMessage<Self::Out,
+                message: advanced::MultiplexMessage<Self::Out,
                                                    Body<Self::BodyOut, Self::Error>,
                                                    Self::Error>)
                 -> io::Result<()> {
-        if let Ok(request) = request {
-            let response = self.service.call(request);
-            let mut in_flight = self.in_flight.lock().unwrap();
-            in_flight.push_back(InFlight::Active(response));
+        assert!(self.poll_ready().is_ready());
+
+        let advanced::MultiplexMessage { id, message, solo } = message;
+
+        //assert!(!solo);
+
+        if !solo {
+            if let Ok(request) = message {
+                let response = self.service.call(request);
+                let mut in_flight = self.in_flight.lock().unwrap();
+                in_flight.push((id, InFlight::Active(response)));
+            }
         }
+
+        // TODO: Should the error be handled differently?
         Ok(())
     }
 
     fn poll
         (&mut self)
-         -> Poll<Option<advanced::PipelineMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
+         -> Poll<Option<advanced::MultiplexMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
         let mut in_flight = self.in_flight.lock().unwrap();
-        for slot in in_flight.iter_mut() {
-            slot.poll();
+        trace!("Dispatch::poll");
+
+        let mut idx = None;
+
+        for (i, &mut (request_id, ref mut slot)) in in_flight.iter_mut().enumerate() {
+            trace!("   --> poll; request_id={:?}", request_id);
+            if slot.poll() && idx.is_none() {
+                idx = Some(i);
+            }
         }
 
-        match in_flight.front() {
-            Some(&InFlight::Done(_)) => {}
-            _ => return Ok(Async::NotReady),
-        }
+        if let Some(idx) = idx {
+            let (request_id, message) = in_flight.remove(idx);
+            let message = advanced::MultiplexMessage {
+                id: request_id,
+                message: message.unwrap_done(),
+                solo: false,
+            };
 
-        match in_flight.pop_front() {
-            Some(InFlight::Done(res)) => Ok(Async::Ready(Some(res))),
-            _ => panic!(),
+            Ok(Async::Ready(Some(message)))
+        } else {
+            Ok(Async::NotReady)
         }
     }
 
-    fn has_in_flight(&self) -> bool {
+    fn poll_ready(&self) -> Async<()> {
         let in_flight = self.in_flight.lock().unwrap();
-        !in_flight.is_empty()
+        if in_flight.len() < MAX_IN_FLIGHT_REQUESTS {
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        }
+    }
+
+    fn cancel(&mut self, _request_id: RequestId) -> io::Result<()> {
+        // todo: implement
+        Ok(())
     }
 }
 
 impl<F: Future> InFlight<F> {
-    fn poll(&mut self) {
+    fn poll(&mut self) -> bool {
         let res = match *self {
             InFlight::Active(ref mut f) => {
+                trace!("   --> polling future");
                 match f.poll() {
                     Ok(Async::Ready(e)) => Ok(e),
                     Err(e) => Err(e),
-                    Ok(Async::NotReady) => return,
+                    Ok(Async::NotReady) => return false,
                 }
             }
-            _ => return,
+            _ => return true,
         };
+
         *self = InFlight::Done(res);
+        true
+    }
+
+    fn unwrap_done(self) -> Result<F::Item, F::Error> {
+        match self {
+            InFlight::Done(res) => res,
+            _ => panic!("future is not ready"),
+        }
     }
 }
 
@@ -139,8 +179,9 @@ impl GearmanServer {
         let connections = Arc::new(Mutex::new(HashMap::new()));
         let remote = core.remote();
         let service_remote = remote.clone();
+        let request_counter = Arc::new(AtomicUsize::new(1)); // 0 reserved for solo-ish
         let server = listener.incoming().for_each(|(socket, _)| {
-            let transport = GearmanFramed(socket.framed(PacketCodec::new()));
+            let transport = GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone())));
             let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
             let service = GearmanService::new(conn_id,
                                               queues.clone(),
@@ -156,16 +197,17 @@ impl GearmanServer {
                 let mut connections = connections.lock().unwrap();
                 connections.insert(conn_id, tx.clone());
             }
-            let in_flight = Arc::new(Mutex::new(VecDeque::with_capacity(32)));
+            let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
             let dispatch = Dispatch::new(service, transport, in_flight.clone());
             let backchannel = rx.for_each(move |message| {
                 let mut in_flight = in_flight.lock().unwrap();
                 debug!("Got backchannel for {}: {:?}", conn_id, message);
-                in_flight.push_back(InFlight::Active(future::finished(message).boxed()));
+                let request_id = 0; // XXX Possibly need mapping from PRE_SLEEP -> a req_id
+                in_flight.push((request_id, InFlight::Active(future::finished(message).boxed())));
                 Ok(())
             });
             handle.spawn(backchannel);
-            let pipeline = advanced::Pipeline::new(dispatch);
+            let pipeline = advanced::Multiplex::new(dispatch);
             handle.spawn(pipeline.map_err(|_| ()));
             Ok(())
         });

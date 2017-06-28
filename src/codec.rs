@@ -2,11 +2,13 @@ use std::cmp::min;
 use std::fmt;
 use std::io;
 use std::str;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::{Bytes, BytesMut};
 use bytes::{IntoBuf, Buf, BufMut, BigEndian};
 use tokio_io::codec::{Encoder, Decoder};
-use tokio_proto::streaming::pipeline::Frame;
+use tokio_proto::streaming::multiplex::{Frame, RequestId};
 
 use constants::*;
 use packet::{PacketMagic, PTYPES};
@@ -36,12 +38,18 @@ impl fmt::Debug for PacketHeader {
 }
 
 pub struct PacketCodec {
-    pub data_todo: Option<usize>,
+    data_todo: Option<usize>,
+    request_counter: Arc<AtomicUsize>,
+    active_request_id: RequestId,
 }
 
 impl PacketCodec {
-    pub fn new() -> PacketCodec {
-        PacketCodec { data_todo: None }
+    pub fn new(request_counter: Arc<AtomicUsize>) -> PacketCodec {
+        PacketCodec {
+            data_todo: None,
+            request_counter: request_counter,
+            active_request_id: 0,
+        }
     }
 }
 
@@ -64,18 +72,20 @@ impl PacketHeader {
                 _ => ADMIN_UNKNOWN,
             };
             return Ok(Some(Frame::Message {
+                id: 0,
                 message: PacketHeader {
                     magic: PacketMagic::TEXT,
                     ptype: command,
                     psize: 0,
                 },
                 body: false,
+                solo: false,
             }));
         }
         Ok(None) // Wait for more data
     }
 
-    pub fn decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {
+    pub fn decode(buf: &mut BytesMut, request_counter: Arc<AtomicUsize>) -> Result<Option<PacketItem>, io::Error> {
         debug!("Decoding {:?}", buf);
         // Peek at first 4
         // Is this a req/res
@@ -105,13 +115,26 @@ impl PacketHeader {
         // Now the length
         let psize = buf.split_to(4).into_buf().get_u32::<BigEndian>();
         debug!("Data section is {} bytes", psize);
+        let solo = match ptype {
+            SUBMIT_JOB | SUBMIT_JOB_LOW | SUBMIT_JOB_HIGH | SUBMIT_REDUCE_JOB => false,
+            GRAB_JOB | GRAB_JOB_UNIQ | GRAB_JOB_ALL => false,
+            GET_STATUS | GET_STATUS_UNIQUE => false,
+            _ => false,  // TODO: when we figure out how to Service::call on these, set to true
+        };
+        let req_id: RequestId = if solo {
+            0
+        } else {
+            request_counter.fetch_add(1, Ordering::Relaxed) as RequestId
+        };
         Ok(Some(Frame::Message {
+            id: req_id,
             message: PacketHeader {
                 magic: magic,
                 ptype: ptype,
                 psize: psize,
             },
             body: true, // TODO: false for 0 psize?
+            solo: solo,
         }))
     }
 
@@ -147,12 +170,15 @@ impl Decoder for PacketCodec {
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match self.data_todo {
             None => {
-                match PacketHeader::decode(buf)? {
-                    Some(Frame::Message { message, body }) => {
+                match PacketHeader::decode(buf, self.request_counter.clone())? {
+                    Some(Frame::Message { id, message, body, solo }) => {
+                        self.active_request_id = id;
                         self.data_todo = Some(message.psize as usize);
                         Ok(Some(Frame::Message {
+                            id: id,
                             message: message,
                             body: body,
+                            solo: solo,
                         }))
                     }
                     Some(_) => panic!("Expecting Frame::Message, got something else"),
@@ -161,12 +187,12 @@ impl Decoder for PacketCodec {
             }
             Some(0) => {
                 self.data_todo = None;
-                Ok(Some(Frame::Body { chunk: None }))
+                Ok(Some(Frame::Body { id: self.active_request_id, chunk: None }))
             }
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
                 self.data_todo = Some(data_todo - chunk_size);
-                Ok(Some(Frame::Body { chunk: Some(buf.split_to(chunk_size)) }))
+                Ok(Some(Frame::Body { id: self.active_request_id, chunk: Some(buf.split_to(chunk_size)) }))
             }
         }
     }
@@ -179,20 +205,22 @@ impl Encoder for PacketCodec {
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
         debug!("Encoding {:?}", msg);
         match msg {
-            Frame::Message { message, body } => {
+            Frame::Message { id, message, body, solo } => {
+                trace!("Encoding header for id={} solo={}", id, solo);
                 if body {
                     debug!("body follows")
                 }
                 buf.extend(message.to_bytes())
             }
-            Frame::Body { chunk } => {
+            Frame::Body { id, chunk } => {
+                trace!("Encoding body for id={}", id);
                 match chunk {
                     Some(chunk) => buf.extend_from_slice(&chunk[..]),
                     None => {}
                 }
             }
-            Frame::Error { error } => {
-                error!("Sending error frame. {}", error);
+            Frame::Error { id, error } => {
+                error!("Sending error frame for id={}. {}", id, error);
                 buf.extend("ERR UNKNOWN_COMMAND Unknown+server+command".bytes())
             }
         }
