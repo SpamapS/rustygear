@@ -1,5 +1,7 @@
+// TODO: phase this file out
+use std::collections::HashMap;
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicUsize;
 
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -32,7 +34,7 @@ impl<T: AsyncRead + AsyncWrite + 'static> ServerProto<T> for GearmanProto {
     type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
-        let codec = PacketCodec::new(self.request_counter.clone());
+        let codec = PacketCodec::new(self.request_counter.clone(), 0, Arc::new(Mutex::new(HashMap::new())));
 
         Ok(GearmanFramed::<T>(io.framed(codec)))
     }

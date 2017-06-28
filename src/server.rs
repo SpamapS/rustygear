@@ -73,8 +73,8 @@ impl<T> advanced::Dispatch for Dispatch<T>
 
     fn dispatch(&mut self,
                 message: advanced::MultiplexMessage<Self::Out,
-                                                   Body<Self::BodyOut, Self::Error>,
-                                                   Self::Error>)
+                                                    Body<Self::BodyOut, Self::Error>,
+                                                    Self::Error>)
                 -> io::Result<()> {
         assert!(self.poll_ready().is_ready());
 
@@ -177,40 +177,52 @@ impl GearmanServer {
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let connections = Arc::new(Mutex::new(HashMap::new()));
+        let sleeps = Arc::new(Mutex::new(HashMap::new()));
         let remote = core.remote();
         let service_remote = remote.clone();
         let request_counter = Arc::new(AtomicUsize::new(1)); // 0 reserved for solo-ish
-        let server = listener.incoming().for_each(|(socket, _)| {
-            let transport = GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone())));
-            let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
-            let service = GearmanService::new(conn_id,
-                                              queues.clone(),
-                                              workers.clone(),
-                                              job_count.clone(),
-                                              connections.clone(),
-                                              service_remote.clone());
-            // Create backchannel for sending packets to other connections
-            let (tx, rx) =
-                channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
+        let server =
+            listener.incoming().for_each(|(socket, _)| {
+                let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
+                let transport =
+                    GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone(),
+                                                                 conn_id,
+                                                                 sleeps.clone())));
+                let service = GearmanService::new(conn_id,
+                                                  queues.clone(),
+                                                  workers.clone(),
+                                                  job_count.clone(),
+                                                  connections.clone(),
+                                                  service_remote.clone());
+                // Create backchannel for sending packets to other connections
+                let (tx, rx) =
+                    channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
 
-            {
-                let mut connections = connections.lock().unwrap();
-                connections.insert(conn_id, tx.clone());
-            }
-            let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
-            let dispatch = Dispatch::new(service, transport, in_flight.clone());
-            let backchannel = rx.for_each(move |message| {
-                let mut in_flight = in_flight.lock().unwrap();
-                debug!("Got backchannel for {}: {:?}", conn_id, message);
-                let request_id = 0; // XXX Possibly need mapping from PRE_SLEEP -> a req_id
-                in_flight.push((request_id, InFlight::Active(future::finished(message).boxed())));
+                {
+                    let mut connections = connections.lock().unwrap();
+                    connections.insert(conn_id, tx.clone());
+                }
+                let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
+                let dispatch = Dispatch::new(service, transport, in_flight.clone());
+                let sleeps = sleeps.clone();
+                let backchannel = rx.for_each(move |message| {
+                    debug!("Got backchannel for {}: {:?}", conn_id, message);
+                    let mut in_flight = in_flight.lock().unwrap();
+                    let mut sleeps = sleeps.lock().unwrap();
+                    match sleeps.remove(&conn_id) {
+                        None => warn!("Trying to wake up a connection that isn't asleep!"),
+                        Some(request_id) => {
+                            in_flight.push((request_id,
+                                            InFlight::Active(future::finished(message).boxed())));
+                        }
+                    }
+                    Ok(())
+                });
+                handle.spawn(backchannel);
+                let pipeline = advanced::Multiplex::new(dispatch);
+                handle.spawn(pipeline.map_err(|_| ()));
                 Ok(())
             });
-            handle.spawn(backchannel);
-            let pipeline = advanced::Multiplex::new(dispatch);
-            handle.spawn(pipeline.map_err(|_| ()));
-            Ok(())
-        });
         core.run(server).unwrap();
     }
 }

@@ -1,8 +1,9 @@
 use std::cmp::min;
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::str;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::{Bytes, BytesMut};
@@ -41,14 +42,21 @@ pub struct PacketCodec {
     data_todo: Option<usize>,
     request_counter: Arc<AtomicUsize>,
     active_request_id: RequestId,
+    conn_id: usize,
+    sleeps: Arc<Mutex<HashMap<usize, RequestId>>>,
 }
 
 impl PacketCodec {
-    pub fn new(request_counter: Arc<AtomicUsize>) -> PacketCodec {
+    pub fn new(request_counter: Arc<AtomicUsize>,
+               conn_id: usize,
+               sleeps: Arc<Mutex<HashMap<usize, RequestId>>>)
+               -> PacketCodec {
         PacketCodec {
             data_todo: None,
             request_counter: request_counter,
             active_request_id: 0,
+            conn_id: conn_id,
+            sleeps: sleeps,
         }
     }
 }
@@ -85,7 +93,11 @@ impl PacketHeader {
         Ok(None) // Wait for more data
     }
 
-    pub fn decode(buf: &mut BytesMut, request_counter: Arc<AtomicUsize>) -> Result<Option<PacketItem>, io::Error> {
+    pub fn decode(buf: &mut BytesMut,
+                  conn_id: usize,
+                  request_counter: &Arc<AtomicUsize>,
+                  sleeps: &mut HashMap<usize, RequestId>)
+                  -> Result<Option<PacketItem>, io::Error> {
         debug!("Decoding {:?}", buf);
         // Peek at first 4
         // Is this a req/res
@@ -116,9 +128,13 @@ impl PacketHeader {
         let psize = buf.split_to(4).into_buf().get_u32::<BigEndian>();
         debug!("Data section is {} bytes", psize);
         let solo = match ptype {
-            SUBMIT_JOB | SUBMIT_JOB_LOW | SUBMIT_JOB_HIGH | SUBMIT_REDUCE_JOB => false,
+            SUBMIT_JOB |
+            SUBMIT_JOB_LOW |
+            SUBMIT_JOB_HIGH |
+            SUBMIT_REDUCE_JOB => false,
             GRAB_JOB | GRAB_JOB_UNIQ | GRAB_JOB_ALL => false,
-            GET_STATUS | GET_STATUS_UNIQUE => false,
+            GET_STATUS |
+            GET_STATUS_UNIQUE => false,
             _ => false,  // TODO: when we figure out how to Service::call on these, set to true
         };
         let req_id: RequestId = if solo {
@@ -126,6 +142,10 @@ impl PacketHeader {
         } else {
             request_counter.fetch_add(1, Ordering::Relaxed) as RequestId
         };
+        if ptype == PRE_SLEEP {
+            trace!("Got sleep for conn_id = {} req_id = {}", conn_id, req_id);
+            sleeps.insert(conn_id, req_id);
+        }
         Ok(Some(Frame::Message {
             id: req_id,
             message: PacketHeader {
@@ -170,7 +190,8 @@ impl Decoder for PacketCodec {
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match self.data_todo {
             None => {
-                match PacketHeader::decode(buf, self.request_counter.clone())? {
+                let mut sleeps = self.sleeps.lock().unwrap();
+                match PacketHeader::decode(buf, self.conn_id, &self.request_counter, &mut sleeps)? {
                     Some(Frame::Message { id, message, body, solo }) => {
                         self.active_request_id = id;
                         self.data_todo = Some(message.psize as usize);
@@ -187,12 +208,18 @@ impl Decoder for PacketCodec {
             }
             Some(0) => {
                 self.data_todo = None;
-                Ok(Some(Frame::Body { id: self.active_request_id, chunk: None }))
+                Ok(Some(Frame::Body {
+                    id: self.active_request_id,
+                    chunk: None,
+                }))
             }
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
                 self.data_todo = Some(data_todo - chunk_size);
-                Ok(Some(Frame::Body { id: self.active_request_id, chunk: Some(buf.split_to(chunk_size)) }))
+                Ok(Some(Frame::Body {
+                    id: self.active_request_id,
+                    chunk: Some(buf.split_to(chunk_size)),
+                }))
             }
         }
     }

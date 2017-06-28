@@ -91,11 +91,11 @@ impl GearmanService {
                -> GearmanService {
         GearmanService {
             conn_id: conn_id,
-            queues: queues.clone(),
+            queues: queues,
             worker: Arc::new(Mutex::new((Worker::new()))),
-            workers: workers.clone(),
-            job_count: job_count.clone(),
-            connections: connections.clone(),
+            workers: workers,
+            job_count: job_count,
+            connections: connections,
             remote: remote,
         }
     }
