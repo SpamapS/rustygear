@@ -17,7 +17,10 @@ use rustygear::worker::{Worker, SharedWorkers, Wake};
 
 #[test]
 fn admin_command_status_1job() {
-    let j = Job::new(Bytes::from("f"), vec![b'u'], Vec::new(), vec![b'h']);
+    let j = Job::new(Bytes::from("f"),
+                     Bytes::from("u"),
+                     Bytes::new(),
+                     Bytes::from("h"));
     let mut w = Worker::new();
     w.can_do(Bytes::from("f"));
     let mut storage = SharedJobStorage::new_job_storage();
