@@ -252,18 +252,17 @@ impl GearmanService {
         // should drop the receiver and all of its backed up items.
         let connections = self.connections.clone();
         let conn_id = self.conn_id;
-        rx.take(1).for_each(move |_| {
-            {
-                let mut connections = connections.lock().unwrap();
-                connections.remove(&conn_id);
-            }
-            Ok(())
-        })
-        .map_err(move |_| {
-            io::Error::new(io::ErrorKind::Other, "receiver error")
-        })
-        .map(move |_| resp)
-        .boxed()
+        rx.take(1)
+            .for_each(move |_| {
+                {
+                    let mut connections = connections.lock().unwrap();
+                    connections.remove(&conn_id);
+                }
+                Ok(())
+            })
+            .map_err(move |_| io::Error::new(io::ErrorKind::Other, "receiver error"))
+            .map(move |_| resp)
+            .boxed()
     }
 
     fn handle_submit_job(&self,
@@ -303,9 +302,9 @@ impl GearmanService {
                                         //let fut = tx.send(new_wake());
                                         //wakes.push(move |_| {fut});
                                         remote.spawn(move |handle| {
-                                            handle.spawn(tx.send(()).then(|res|{
+                                            handle.spawn(tx.send(()).then(|res| {
                                                 match res {
-                                                    Ok(_) => {},
+                                                    Ok(_) => {}
                                                     Err(e) => error!("Send Error! {:?}", e),
                                                 }
                                                 Ok(())

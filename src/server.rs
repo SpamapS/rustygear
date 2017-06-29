@@ -11,6 +11,7 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
 use tokio_proto::streaming::multiplex::{advanced, RequestId};
+use tokio_proto::streaming::multiplex::advanced::MultiplexMessage;
 use tokio_proto::streaming::Body;
 
 use queues::{HandleJobStorage, SharedJobStorage};
@@ -46,7 +47,8 @@ impl<T> Dispatch<T>
 {
     pub fn new(service: GearmanService,
                transport: GearmanFramed<T>,
-               in_flight: Arc<Mutex<Vec<(RequestId, InFlight<<GearmanService as Service>::Future>)>>>) -> Dispatch<T> {
+               in_flight: Arc<Mutex<Vec<(
+                   RequestId, InFlight<<GearmanService as Service>::Future>)>>>) -> Dispatch<T> {
         Dispatch {
             service: service,
             transport: transport,
@@ -72,13 +74,13 @@ impl<T> advanced::Dispatch for Dispatch<T>
     }
 
     fn dispatch(&mut self,
-                message: advanced::MultiplexMessage<Self::Out,
-                                                    Body<Self::BodyOut, Self::Error>,
-                                                    Self::Error>)
+                message: MultiplexMessage<Self::Out,
+                                          Body<Self::BodyOut, Self::Error>,
+                                          Self::Error>)
                 -> io::Result<()> {
         assert!(self.poll_ready().is_ready());
 
-        let advanced::MultiplexMessage { id, message, solo } = message;
+        let MultiplexMessage { id, message, solo } = message;
 
         //assert!(!solo);
 
@@ -94,9 +96,8 @@ impl<T> advanced::Dispatch for Dispatch<T>
         Ok(())
     }
 
-    fn poll
-        (&mut self)
-         -> Poll<Option<advanced::MultiplexMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
+    fn poll(&mut self)
+            -> Poll<Option<MultiplexMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
         let mut in_flight = self.in_flight.lock().unwrap();
         trace!("Dispatch::poll");
 
@@ -111,7 +112,7 @@ impl<T> advanced::Dispatch for Dispatch<T>
 
         if let Some(idx) = idx {
             let (request_id, message) = in_flight.remove(idx);
-            let message = advanced::MultiplexMessage {
+            let message = MultiplexMessage {
                 id: request_id,
                 message: message.unwrap_done(),
                 solo: false,

@@ -158,7 +158,7 @@ impl Packet {
         }
     }
 
-/*
+    /*
     pub fn admin_from_socket(&mut self,
                              socket: &mut TcpStream,
                              storage: SharedJobStorage,
