@@ -279,7 +279,6 @@ impl GearmanService {
         let mut workers = self.workers.clone();
         let job_count = self.job_count.clone();
         let connections = self.connections.clone();
-        //let wakes: Vec<sink::Send<BackchannelSender>> = Vec::new();
         let remote = self.remote.clone();
 
         let ret = body.concat2()
