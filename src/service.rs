@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::{future, Future, BoxFuture, Stream, Sink};
+use futures::sync::mpsc::{channel, Sender};
 use tokio_core::reactor::Remote;
 use tokio_proto::streaming::{Message, Body};
 use tokio_service::Service;
@@ -16,11 +17,12 @@ use job::Job;
 use packet::PacketMagic;
 use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
-use server::BackchannelSender;
 use constants::*;
 
 pub type GearmanBody = Body<BytesMut, io::Error>;
 pub type GearmanMessage = Message<PacketHeader, GearmanBody>;
+
+const WAKE_BACKLOG_SIZE: usize = 8;
 
 fn new_res(ptype: u32, data: BytesMut) -> GearmanMessage {
     Message::WithBody(PacketHeader {
@@ -41,7 +43,7 @@ pub struct GearmanService {
     pub workers: SharedWorkers,
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
-    pub connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>,
+    pub connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
     remote: Remote,
 }
 
@@ -86,7 +88,7 @@ impl GearmanService {
                queues: SharedJobStorage,
                workers: SharedWorkers,
                job_count: Arc<AtomicUsize>,
-               connections: Arc<Mutex<HashMap<usize, BackchannelSender>>>,
+               connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
                remote: Remote)
                -> GearmanService {
         GearmanService {
@@ -238,7 +240,30 @@ impl GearmanService {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        future::finished(Self::no_response()).boxed()
+        // When we get woke, send a NOOP
+        let (tx, rx) = channel(WAKE_BACKLOG_SIZE);
+        {
+            let mut connections = self.connections.lock().unwrap();
+            connections.insert(self.conn_id, tx);
+        }
+        let resp = new_res(NOOP, BytesMut::new());
+        // If there are more, they are pointless until the NOOP is queued, and once it is queued,
+        // the connections hashmap will have dropped the sender, and this future resolving
+        // should drop the receiver and all of its backed up items.
+        let connections = self.connections.clone();
+        let conn_id = self.conn_id;
+        rx.take(1).for_each(move |_| {
+            {
+                let mut connections = connections.lock().unwrap();
+                connections.remove(&conn_id);
+            }
+            Ok(())
+        })
+        .map_err(move |_| {
+            io::Error::new(io::ErrorKind::Other, "receiver error")
+        })
+        .map(move |_| resp)
+        .boxed()
     }
 
     fn handle_submit_job(&self,
@@ -279,7 +304,7 @@ impl GearmanService {
                                         //let fut = tx.send(new_wake());
                                         //wakes.push(move |_| {fut});
                                         remote.spawn(move |handle| {
-                                            handle.spawn(tx.send(new_wake()).then(|res|{
+                                            handle.spawn(tx.send(()).then(|res|{
                                                 match res {
                                                     Ok(_) => {},
                                                     Err(e) => error!("Send Error! {:?}", e),

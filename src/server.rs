@@ -6,8 +6,6 @@ use std::io;
 
 use bytes::BytesMut;
 use futures::{Async, Future, Stream, Poll};
-use futures::sync::mpsc::{Sender, channel};
-use futures::future;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
@@ -28,9 +26,6 @@ type ResponseBody = BytesMut;
 
 pub struct GearmanServer;
 
-// Arbitrarily limit the number of waiting backchannel messages to 1024 to prevent a dead client
-// from using up all memory.
-const BACKCHANNEL_BUFFER_SIZE: usize = 1024;
 const MAX_IN_FLIGHT_REQUESTS: usize = 32;
 
 struct Dispatch<T>
@@ -169,9 +164,6 @@ impl<F: Future> InFlight<F> {
     }
 }
 
-pub type BackchannelSender =
-    Sender<<GearmanService as Service>::Response>;
-
 impl GearmanServer {
     pub fn run(addr: SocketAddr) {
         let mut core = Core::new().unwrap();
@@ -182,52 +174,24 @@ impl GearmanServer {
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let connections = Arc::new(Mutex::new(HashMap::new()));
-        let sleeps = Arc::new(Mutex::new(HashMap::new()));
         let remote = core.remote();
         let service_remote = remote.clone();
         let request_counter = Arc::new(AtomicUsize::new(1)); // 0 reserved for solo-ish
-        let server =
-            listener.incoming().for_each(|(socket, _)| {
-                let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
-                let transport =
-                    GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone(),
-                                                                 conn_id,
-                                                                 sleeps.clone())));
-                let service = GearmanService::new(conn_id,
-                                                  queues.clone(),
-                                                  workers.clone(),
-                                                  job_count.clone(),
-                                                  connections.clone(),
-                                                  service_remote.clone());
-                // Create backchannel for sending packets to other connections
-                let (tx, rx) =
-                    channel::<<GearmanService as Service>::Response>(BACKCHANNEL_BUFFER_SIZE);
-
-                {
-                    let mut connections = connections.lock().unwrap();
-                    connections.insert(conn_id, tx.clone());
-                }
-                let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
-                let dispatch = Dispatch::new(service, transport, in_flight.clone());
-                let sleeps = sleeps.clone();
-                let backchannel = rx.for_each(move |message| {
-                    debug!("Got backchannel for {}: {:?}", conn_id, message);
-                    let mut in_flight = in_flight.lock().unwrap();
-                    let mut sleeps = sleeps.lock().unwrap();
-                    match sleeps.remove(&conn_id) {
-                        None => warn!("Trying to wake up a connection that isn't asleep!"),
-                        Some(request_id) => {
-                            in_flight.push((request_id,
-                                            InFlight::Active(future::finished(message).boxed())));
-                        }
-                    }
-                    Ok(())
-                });
-                handle.spawn(backchannel);
-                let pipeline = advanced::Multiplex::new(dispatch);
-                handle.spawn(pipeline.map_err(|_| ()));
-                Ok(())
-            });
+        let server = listener.incoming().for_each(|(socket, _)| {
+            let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
+            let transport = GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone())));
+            let service = GearmanService::new(conn_id,
+                                              queues.clone(),
+                                              workers.clone(),
+                                              job_count.clone(),
+                                              connections.clone(),
+                                              service_remote.clone());
+            let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
+            let dispatch = Dispatch::new(service, transport, in_flight.clone());
+            let pipeline = advanced::Multiplex::new(dispatch);
+            handle.spawn(pipeline.map_err(|_| ()));
+            Ok(())
+        });
         core.run(server).unwrap();
     }
 }

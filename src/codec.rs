@@ -1,9 +1,8 @@
 use std::cmp::min;
-use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::str;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::{Bytes, BytesMut};
@@ -42,21 +41,14 @@ pub struct PacketCodec {
     data_todo: Option<usize>,
     request_counter: Arc<AtomicUsize>,
     active_request_id: RequestId,
-    conn_id: usize,
-    sleeps: Arc<Mutex<HashMap<usize, RequestId>>>,
 }
 
 impl PacketCodec {
-    pub fn new(request_counter: Arc<AtomicUsize>,
-               conn_id: usize,
-               sleeps: Arc<Mutex<HashMap<usize, RequestId>>>)
-               -> PacketCodec {
+    pub fn new(request_counter: Arc<AtomicUsize>) -> PacketCodec {
         PacketCodec {
             data_todo: None,
             request_counter: request_counter,
             active_request_id: 0,
-            conn_id: conn_id,
-            sleeps: sleeps,
         }
     }
 }
@@ -94,9 +86,7 @@ impl PacketHeader {
     }
 
     pub fn decode(buf: &mut BytesMut,
-                  conn_id: usize,
-                  request_counter: &Arc<AtomicUsize>,
-                  sleeps: &mut HashMap<usize, RequestId>)
+                  request_counter: &Arc<AtomicUsize>)
                   -> Result<Option<PacketItem>, io::Error> {
         debug!("Decoding {:?}", buf);
         // Peek at first 4
@@ -142,10 +132,6 @@ impl PacketHeader {
         } else {
             request_counter.fetch_add(1, Ordering::Relaxed) as RequestId
         };
-        if ptype == PRE_SLEEP {
-            trace!("Got sleep for conn_id = {} req_id = {}", conn_id, req_id);
-            sleeps.insert(conn_id, req_id);
-        }
         Ok(Some(Frame::Message {
             id: req_id,
             message: PacketHeader {
@@ -190,8 +176,7 @@ impl Decoder for PacketCodec {
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         match self.data_todo {
             None => {
-                let mut sleeps = self.sleeps.lock().unwrap();
-                match PacketHeader::decode(buf, self.conn_id, &self.request_counter, &mut sleeps)? {
+                match PacketHeader::decode(buf, &self.request_counter)? {
                     Some(Frame::Message { id, message, body, solo }) => {
                         self.active_request_id = id;
                         self.data_todo = Some(message.psize as usize);
