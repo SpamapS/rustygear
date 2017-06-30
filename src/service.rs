@@ -19,12 +19,12 @@ use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
 use constants::*;
 
-pub type GearmanBody = Body<BytesMut, io::Error>;
+pub type GearmanBody = Body<Bytes, io::Error>;
 pub type GearmanMessage = Message<PacketHeader, GearmanBody>;
 
 const WAKE_BACKLOG_SIZE: usize = 8;
 
-fn new_res(ptype: u32, data: BytesMut) -> GearmanMessage {
+fn new_res(ptype: u32, data: Bytes) -> GearmanMessage {
     Message::WithBody(PacketHeader {
                           magic: PacketMagic::RES,
                           ptype: ptype,
@@ -33,9 +33,7 @@ fn new_res(ptype: u32, data: BytesMut) -> GearmanMessage {
                       Body::from(data))
 }
 
-pub fn new_wake() -> GearmanMessage {
-    new_res(NOOP, BytesMut::new())
-}
+type JobBodySenders = Arc<Mutex<HashMap<Bytes, Vec<Sender<Result<Bytes, io::Error>>>>>>;
 
 pub struct GearmanService {
     pub conn_id: usize,
@@ -44,15 +42,16 @@ pub struct GearmanService {
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
     pub connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
+    job_body_senders: JobBodySenders,
     remote: Remote,
 }
 
-fn next_field(buf: &mut BytesMut) -> Result<Bytes, io::Error> {
+fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
     match buf[..].iter().position(|b| *b == b'\0') {
         Some(null_pos) => {
             let value = buf.split_to(null_pos);
             buf.split_to(1);
-            Ok(value.freeze())
+            Ok(value)
         }
         None => Err(io::Error::new(io::ErrorKind::Other, "Can't find null")),
     }
@@ -62,13 +61,13 @@ impl GearmanService {
     /// Things that don't require a body should use this
     fn response_from_header(&self,
                             header: &PacketHeader)
-                            -> Message<PacketHeader, Body<BytesMut, io::Error>> {
+                            -> Message<PacketHeader, Body<Bytes, io::Error>> {
         match header.ptype {
             ADMIN_VERSION => {
                 let resp_str = "OK some-rustygear-version\n";
                 let mut resp_body = BytesMut::with_capacity(resp_str.len());
                 resp_body.put(&resp_str[..]);
-                let resp_body = Body::from(resp_body);
+                let resp_body = Body::from(resp_body.freeze());
                 Message::WithBody(PacketHeader {
                                       magic: PacketMagic::TEXT,
                                       ptype: header.ptype,
@@ -89,6 +88,7 @@ impl GearmanService {
                workers: SharedWorkers,
                job_count: Arc<AtomicUsize>,
                connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
+               job_body_senders: JobBodySenders,
                remote: Remote)
                -> GearmanService {
         GearmanService {
@@ -98,6 +98,7 @@ impl GearmanService {
             workers: workers,
             job_count: job_count,
             connections: connections,
+            job_body_senders: job_body_senders,
             remote: remote,
         }
     }
@@ -108,7 +109,7 @@ impl GearmanService {
                               ptype: ADMIN_RESPONSE,
                               psize: 0,
                           },
-                          Body::from(BytesMut::new()))
+                          Body::from(Bytes::new()))
     }
 
     fn handle_can_do(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
@@ -118,7 +119,6 @@ impl GearmanService {
         trace!("handle_can_do");
         body.concat2()
             .and_then(move |fname| {
-                let fname = fname.freeze();
                 debug!("CAN_DO fname = {:?}", fname);
                 let mut worker = worker.lock().unwrap();
                 worker.can_do(fname);
@@ -132,7 +132,6 @@ impl GearmanService {
         let worker = self.worker.clone();
         body.concat2()
             .and_then(move |fname| {
-                let fname = fname.freeze();
                 debug!("CANT_DO fname = {:?}", fname);
                 let mut worker = worker.lock().unwrap();
                 worker.cant_do(&fname);
@@ -165,12 +164,12 @@ impl GearmanService {
                             // reducer not implemented
                             data.put_u8(b'\0');
                             data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN_ALL, data)).boxed();
+                            return future::finished(new_res(JOB_ASSIGN_ALL, data.freeze())).boxed();
                         }
                         None => {}
                     }
                 };
-                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+                future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
             .boxed()
     }
@@ -197,12 +196,13 @@ impl GearmanService {
                             data.extend(&j.unique);
                             data.put_u8(b'\0');
                             data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN_UNIQ, data)).boxed();
+                            return future::finished(new_res(JOB_ASSIGN_UNIQ, data.freeze()))
+                                .boxed();
                         }
                         None => {}
                     }
                 };
-                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+                future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
             .boxed()
     }
@@ -226,12 +226,12 @@ impl GearmanService {
                             data.extend(&j.fname);
                             data.put_u8(b'\0');
                             data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN, data)).boxed();
+                            return future::finished(new_res(JOB_ASSIGN, data.freeze())).boxed();
                         }
                         None => {}
                     }
                 };
-                future::finished(new_res(NO_JOB, BytesMut::new())).boxed()
+                future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
             .boxed()
     }
@@ -246,7 +246,7 @@ impl GearmanService {
             let mut connections = self.connections.lock().unwrap();
             connections.insert(self.conn_id, tx);
         }
-        let resp = new_res(NOOP, BytesMut::new());
+        let resp = new_res(NOOP, Bytes::new());
         // If there are more, they are pointless until the NOOP is queued, and once it is queued,
         // the connections hashmap will have dropped the sender, and this future resolving
         // should drop the receiver and all of its backed up items.
@@ -279,12 +279,13 @@ impl GearmanService {
         let job_count = self.job_count.clone();
         let connections = self.connections.clone();
         let remote = self.remote.clone();
+        let (tx, response_body) = Body::pair();
+        let job_body_senders = self.job_body_senders.clone();
 
         let ret = body.concat2()
             .and_then(move |mut fields| {
                 let fname = next_field(&mut fields).unwrap();
                 let unique = next_field(&mut fields).unwrap();
-                let data = fields.freeze();
                 let mut add = false;
                 let handle = match queues.coalesce_unique(&unique, conn_id) {
                     Some(handle) => handle,
@@ -299,8 +300,6 @@ impl GearmanService {
                                     }
                                     Some(tx) => {
                                         let tx = tx.clone();
-                                        //let fut = tx.send(new_wake());
-                                        //wakes.push(move |_| {fut});
                                         remote.spawn(move |handle| {
                                             handle.spawn(tx.send(()).then(|res| {
                                                 match res {
@@ -325,11 +324,28 @@ impl GearmanService {
                     }
                 };
                 if add {
-                    let job = Arc::new(Job::new(fname, unique, data, handle.clone()));
+                    let job = Arc::new(Job::new(fname, unique, fields, handle.clone()));
                     info!("Created job {:?}", job);
                     queues.add_job(job.clone(), priority, conn_id);
                 }
-                future::finished(new_res(JOB_CREATED, BytesMut::from(handle)))
+                tx.send(Ok(handle.clone())).then(move |tx| match tx {
+                    Err(e) => Err(io::Error::new(io::ErrorKind::Other, e)),
+                    Ok(tx) => {
+                        // If we don't store any senders, the sender will be dropped and the rx
+                        // stream should end thus releasing the waiter immediately.
+                        let psize = handle.len() as u32;
+                        if wait {
+                            let mut job_body_senders = job_body_senders.lock().unwrap();
+                            job_body_senders.entry(handle).or_insert(Vec::new()).push(tx);
+                        }
+                        Ok(Message::WithBody(PacketHeader {
+                                                 magic: PacketMagic::RES,
+                                                 ptype: JOB_CREATED,
+                                                 psize: psize,
+                                             },
+                                             response_body))
+                    }
+                })
             })
             .boxed();
         ret

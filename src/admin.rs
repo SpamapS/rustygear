@@ -24,5 +24,6 @@ pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -
             .into_bytes());
     }
     response.extend(b".\n");
+    let response = response.freeze();
     Message::WithBody(PacketHeader::new_text_res(&response), Body::from(response))
 }

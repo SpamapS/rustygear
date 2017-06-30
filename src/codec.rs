@@ -53,7 +53,7 @@ impl PacketCodec {
     }
 }
 
-pub type PacketItem = Frame<PacketHeader, BytesMut, io::Error>;
+pub type PacketItem = Frame<PacketHeader, Bytes, io::Error>;
 
 impl PacketHeader {
     pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {
@@ -160,7 +160,7 @@ impl PacketHeader {
         buf.freeze()
     }
 
-    pub fn new_text_res(body: &BytesMut) -> PacketHeader {
+    pub fn new_text_res(body: &Bytes) -> PacketHeader {
         PacketHeader {
             magic: PacketMagic::TEXT,
             ptype: ADMIN_RESPONSE,
@@ -170,7 +170,7 @@ impl PacketHeader {
 }
 
 impl Decoder for PacketCodec {
-    type Item = Frame<PacketHeader, BytesMut, io::Error>;
+    type Item = Frame<PacketHeader, Bytes, io::Error>;
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
@@ -203,7 +203,7 @@ impl Decoder for PacketCodec {
                 self.data_todo = Some(data_todo - chunk_size);
                 Ok(Some(Frame::Body {
                     id: self.active_request_id,
-                    chunk: Some(buf.split_to(chunk_size)),
+                    chunk: Some(buf.split_to(chunk_size).freeze()),
                 }))
             }
         }
@@ -211,7 +211,7 @@ impl Decoder for PacketCodec {
 }
 
 impl Encoder for PacketCodec {
-    type Item = Frame<PacketHeader, BytesMut, io::Error>;
+    type Item = Frame<PacketHeader, Bytes, io::Error>;
     type Error = io::Error;
 
     fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {

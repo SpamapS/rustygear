@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::io;
 
-use bytes::BytesMut;
+use bytes::Bytes;
 use futures::{Async, Future, Stream, Poll};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_core::reactor::Core;
@@ -21,9 +21,9 @@ use transport::GearmanFramed;
 use service::{GearmanBody, GearmanService};
 
 type Request = PacketHeader;
-type RequestBody = BytesMut;
+type RequestBody = Bytes;
 type Response = PacketHeader;
-type ResponseBody = BytesMut;
+type ResponseBody = Bytes;
 
 pub struct GearmanServer;
 
@@ -178,6 +178,7 @@ impl GearmanServer {
         let remote = core.remote();
         let service_remote = remote.clone();
         let request_counter = Arc::new(AtomicUsize::new(1)); // 0 reserved for solo-ish
+        let job_body_senders = Arc::new(Mutex::new(HashMap::new()));
         let server = listener.incoming().for_each(|(socket, _)| {
             let conn_id = curr_conn_id.fetch_add(1, Ordering::Relaxed);
             let transport = GearmanFramed(socket.framed(PacketCodec::new(request_counter.clone())));
@@ -186,6 +187,7 @@ impl GearmanServer {
                                               workers.clone(),
                                               job_count.clone(),
                                               connections.clone(),
+                                              job_body_senders.clone(),
                                               service_remote.clone());
             let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
             let dispatch = Dispatch::new(service, transport, in_flight.clone());
