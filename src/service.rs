@@ -336,7 +336,9 @@ impl GearmanService {
                         let psize = handle.len() as u32;
                         if wait {
                             let mut job_body_senders = job_body_senders.lock().unwrap();
-                            debug!("I just inserting {:?} into {:?}", &handle, &*job_body_senders);
+                            debug!("I just inserting {:?} into {:?}",
+                                   &handle,
+                                   &*job_body_senders);
                             job_body_senders.entry(handle).or_insert(Vec::new()).push(tx);
                             debug!("I just inserted into {:?}", &*job_body_senders);
                         }
@@ -353,10 +355,13 @@ impl GearmanService {
         ret
     }
 
-    fn handle_work_complete(&self, header: PacketHeader, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+    fn handle_work_complete(&self,
+                            header: PacketHeader,
+                            body: GearmanBody)
+                            -> BoxFuture<GearmanMessage, io::Error> {
         let job_body_senders = self.job_body_senders.clone();
         // Search for handle
-        let mut handle = BytesMut::with_capacity(12).freeze(); // Usual length of handles, 10digits + H:
+        let mut handle = BytesMut::with_capacity(12).freeze(); // length of handles, 10digits + H:
         let mut found_null = false;
         let mut sent_headers = false;
         let prev_chunks = Arc::new(Mutex::new(Vec::new()));
@@ -364,7 +369,7 @@ impl GearmanService {
         let worker = self.worker.clone();
         let queues = self.queues.clone();
         let remote = self.remote.clone();
-        body.for_each(move |mut chunk| { 
+        body.for_each(move |mut chunk| {
             if !found_null {
                 match chunk[..].iter().position(|b| *b == b'\0') {
                     Some(null_pos) => {
@@ -381,13 +386,14 @@ impl GearmanService {
                         match worker.job() {
                             Some(ref mut j) => {
                                 if j.handle != handle {
-                                    error!("WORK_COMPLETE received for inactive job handle: {:?}", handle)
+                                    error!("WORK_COMPLETE received for inactive job handle: {:?}",
+                                           handle)
                                 }
                                 let mut queues = queues.lock().unwrap();
                                 queues.remove_job(&j.unique);
                             }
                             None => {
-                                error!("WORK_COMPLETE received but no active jobs"); // TODO: worker id
+                                error!("WORK_COMPLETE received but no active jobs");
                             }
                         }
                         worker.unassign_job();
@@ -426,7 +432,8 @@ impl GearmanService {
                         };
                         debug!("Sending {:?} to a sender: {:?}", to_send, sender);
                         remote.spawn(move |reactor_handle| {
-                            reactor_handle.spawn(sender.send(Ok(to_send)).map(|_| {}).map_err(|_| {}));
+                            reactor_handle.spawn(
+                                sender.send(Ok(to_send)).map(|_| {}).map_err(|_| {}));
                             Ok(())
                         });
                     }
