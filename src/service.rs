@@ -353,11 +353,12 @@ impl GearmanService {
         ret
     }
 
-    fn handle_work_complete(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+    fn handle_work_complete(&self, header: PacketHeader, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
         let job_body_senders = self.job_body_senders.clone();
         // Search for handle
         let mut handle = BytesMut::with_capacity(12).freeze(); // Usual length of handles, 10digits + H:
         let mut found_null = false;
+        let mut sent_headers = false;
         let prev_chunks = Arc::new(Mutex::new(Vec::new()));
         let body_senders = Arc::new(Mutex::new(None));
         let worker = self.worker.clone();
@@ -412,9 +413,20 @@ impl GearmanService {
                     for sender in body_senders {
                         let sender = sender.clone();
                         let chunk = chunk.clone();
-                        debug!("Sending {:?} to a sender: {:?}", chunk, sender);
+                        let to_send = if sent_headers {
+                            chunk
+                        } else {
+                            sent_headers = true;
+                            let mut temp = BytesMut::with_capacity(13 + handle.len() + chunk.len());
+                            temp.extend(header.to_bytes());
+                            temp.extend(&handle);
+                            temp.put_u8(b'\0');
+                            temp.extend_from_slice(&chunk[..]);
+                            temp.freeze()
+                        };
+                        debug!("Sending {:?} to a sender: {:?}", to_send, sender);
                         remote.spawn(move |reactor_handle| {
-                            reactor_handle.spawn(sender.send(Ok(chunk)).map(|_| {}).map_err(|_| {}));
+                            reactor_handle.spawn(sender.send(Ok(to_send)).map(|_| {}).map_err(|_| {}));
                             Ok(())
                         });
                     }
@@ -464,7 +476,7 @@ impl Service for GearmanService {
                     GRAB_JOB => self.handle_grab_job(body),
                     GRAB_JOB_UNIQ => self.handle_grab_job_uniq(body),
                     GRAB_JOB_ALL => self.handle_grab_job_all(body),
-                    WORK_COMPLETE => self.handle_work_complete(body),/*
+                    WORK_COMPLETE => self.handle_work_complete(header, body),/*
                     WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
                     ECHO_REQ => self.handle_echo_req(&req),*/
                     _ => {
