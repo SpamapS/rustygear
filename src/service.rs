@@ -336,7 +336,9 @@ impl GearmanService {
                         let psize = handle.len() as u32;
                         if wait {
                             let mut job_body_senders = job_body_senders.lock().unwrap();
+                            debug!("I just inserting {:?} into {:?}", &handle, &*job_body_senders);
                             job_body_senders.entry(handle).or_insert(Vec::new()).push(tx);
+                            debug!("I just inserted into {:?}", &*job_body_senders);
                         }
                         Ok(Message::WithBody(PacketHeader {
                                                  magic: PacketMagic::RES,
@@ -349,6 +351,79 @@ impl GearmanService {
             })
             .boxed();
         ret
+    }
+
+    fn handle_work_complete(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
+        let job_body_senders = self.job_body_senders.clone();
+        // Search for handle
+        let mut handle = BytesMut::with_capacity(12).freeze(); // Usual length of handles, 10digits + H:
+        let mut found_null = false;
+        let prev_chunks = Arc::new(Mutex::new(Vec::new()));
+        let body_senders = Arc::new(Mutex::new(None));
+        let worker = self.worker.clone();
+        let queues = self.queues.clone();
+        let remote = self.remote.clone();
+        body.for_each(move |mut chunk| { 
+            if !found_null {
+                match chunk[..].iter().position(|b| *b == b'\0') {
+                    Some(null_pos) => {
+                        let value = chunk.split_to(null_pos);
+                        // If there are previous values we need those in the handle too
+                        let prev_chunks = prev_chunks.lock().unwrap();
+                        for pchunk in prev_chunks.iter() {
+                            handle.extend(pchunk);
+                        }
+                        handle.extend(&value);
+                        chunk.split_to(1); // Drop null
+                        info!("Job is complete {:?}", handle);
+                        let mut worker = worker.lock().unwrap();
+                        match worker.job() {
+                            Some(ref mut j) => {
+                                if j.handle != handle {
+                                    error!("WORK_COMPLETE received for inactive job handle: {:?}", handle)
+                                }
+                                let mut queues = queues.lock().unwrap();
+                                queues.remove_job(&j.unique);
+                            }
+                            None => {
+                                error!("WORK_COMPLETE received but no active jobs"); // TODO: worker id
+                            }
+                        }
+                        worker.unassign_job();
+                        // Now send this as first body chunk if there are senders
+                        let mut job_body_senders = job_body_senders.lock().unwrap();
+                        // We use remove so the senders get dropped and channels shut down after we
+                        // fall out of scope. If there are no senders, we'll get a None here anyway
+                        let mut body_senders = body_senders.lock().unwrap();
+                        debug!("Looking for {:?} in senders: {:?}", handle, &*job_body_senders);
+                        *body_senders = job_body_senders.remove(&handle);
+                        found_null = true;
+                    }
+                    None => {
+                        let mut prev_chunks = prev_chunks.lock().unwrap();
+                        prev_chunks.push(chunk.clone())
+                    }
+                }
+            }
+            let body_senders = body_senders.lock().unwrap();
+            match *body_senders {
+                None => {},
+                Some(ref body_senders) => {
+                    for sender in body_senders {
+                        let sender = sender.clone();
+                        let chunk = chunk.clone();
+                        debug!("Sending {:?} to a sender: {:?}", chunk, sender);
+                        remote.spawn(move |reactor_handle| {
+                            reactor_handle.spawn(sender.send(Ok(chunk)).map(|_| {}).map_err(|_| {}));
+                            Ok(())
+                        });
+                    }
+                }
+            }
+            Ok(())
+        })
+        .map(move |_| { Self::no_response() })
+        .boxed()
     }
 }
 
@@ -377,19 +452,19 @@ impl Service for GearmanService {
             }
             Message::WithBody(header, body) => {
                 match header.ptype {
-                    SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, false, body),
-                    SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, false, body),
-                    SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, false, body),
-                    SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, true, body),
-                    SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, true, body),
-                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, true, body),
+                    SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, body),
+                    SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, body),
+                    SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, body),
+                    SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, false, body),
+                    SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, false, body),
+                    SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, false, body),
                     PRE_SLEEP => self.handle_pre_sleep(),
                     CAN_DO => self.handle_can_do(body),
                     CANT_DO => self.handle_cant_do(body),
                     GRAB_JOB => self.handle_grab_job(body),
                     GRAB_JOB_UNIQ => self.handle_grab_job_uniq(body),
-                    GRAB_JOB_ALL => self.handle_grab_job_all(body),/*
-                    WORK_COMPLETE => self.handle_work_complete(),
+                    GRAB_JOB_ALL => self.handle_grab_job_all(body),
+                    WORK_COMPLETE => self.handle_work_complete(body),/*
                     WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
                     ECHO_REQ => self.handle_echo_req(&req),*/
                     _ => {
