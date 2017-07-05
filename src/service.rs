@@ -388,8 +388,8 @@ impl GearmanService {
                         match worker.job() {
                             Some(ref mut j) => {
                                 if j.handle != handle {
-                                    error!("WORK_COMPLETE received for inactive job handle: {:?}",
-                                           handle)
+                                    error!("WORK_COMPLETE received for job handle = {:?} but worker is assigned {:?}",
+                                           handle, j.handle)
                                 }
                                 let mut queues = queues.lock().unwrap();
                                 queues.remove_job(&j.unique);
@@ -424,7 +424,6 @@ impl GearmanService {
                         let to_send = if sent_headers {
                             chunk
                         } else {
-                            sent_headers = true;
                             let mut temp = BytesMut::with_capacity(13 + handle.len() + chunk.len());
                             temp.extend(header.to_bytes());
                             temp.extend(&handle);
@@ -439,6 +438,7 @@ impl GearmanService {
                             Ok(())
                         });
                     }
+                    sent_headers = true;
                 }
             }
             Ok(())

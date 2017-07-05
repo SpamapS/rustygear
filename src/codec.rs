@@ -132,6 +132,7 @@ impl PacketHeader {
         } else {
             request_counter.fetch_add(1, Ordering::Relaxed) as RequestId
         };
+        debug!("{} left in buf: {:?}", buf.len(), buf);
         Ok(Some(Frame::Message {
             id: req_id,
             message: PacketHeader {
@@ -201,9 +202,10 @@ impl Decoder for PacketCodec {
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
                 if chunk_size == 0 {
-                    debug!("0 length chunk?");
+                    debug!("0 length chunk? buf.len() = {} data_todo = {}", buf.len(), data_todo);
                     Ok(None)
                 } else {
+                    trace!("chunk of length {} from buf of {:?}", chunk_size, buf);
                     self.data_todo = Some(data_todo - chunk_size);
                     Ok(Some(Frame::Body {
                         id: self.active_request_id,

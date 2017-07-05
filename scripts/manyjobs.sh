@@ -20,7 +20,7 @@ set +x
 for i in $(seq 0 1000) ; do echo -e "a\njob\nfor\n$i\n" >> $outdir/500z.txt ; done
 set -x
 echo And now make a client pushing jobs into it
-timeout 10s gearman -b -P -f foo2 -n < $outdir/500z.txt
+timeout 30s gearman -b -P -f foo2 -n < $outdir/500z.txt
 wait
 
 cleanup
