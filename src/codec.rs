@@ -200,11 +200,16 @@ impl Decoder for PacketCodec {
             }
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
-                self.data_todo = Some(data_todo - chunk_size);
-                Ok(Some(Frame::Body {
-                    id: self.active_request_id,
-                    chunk: Some(buf.split_to(chunk_size).freeze()),
-                }))
+                if chunk_size == 0 {
+                    debug!("0 length chunk?");
+                    Ok(None)
+                } else {
+                    self.data_todo = Some(data_todo - chunk_size);
+                    Ok(Some(Frame::Body {
+                        id: self.active_request_id,
+                        chunk: Some(buf.split_to(chunk_size).freeze()),
+                    }))
+                }
             }
         }
     }
