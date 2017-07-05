@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io;
+use std::ops::Drop;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -54,6 +55,14 @@ fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
             Ok(value)
         }
         None => Err(io::Error::new(io::ErrorKind::Other, "Can't find null")),
+    }
+}
+
+impl Drop for GearmanService {
+    fn drop(&mut self) {
+        trace!("Dropping conn_id = {}", self.conn_id);
+        self.workers.shutdown(self.conn_id);
+        debug!("Dropped conn_id = {}", self.conn_id);
     }
 }
 
