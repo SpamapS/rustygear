@@ -202,7 +202,9 @@ impl Decoder for PacketCodec {
             Some(data_todo) => {
                 let chunk_size = min(buf.len(), data_todo);
                 if chunk_size == 0 {
-                    debug!("0 length chunk? buf.len() = {} data_todo = {}", buf.len(), data_todo);
+                    debug!("0 length chunk? buf.len() = {} data_todo = {}",
+                           buf.len(),
+                           data_todo);
                     Ok(None)
                 } else {
                     trace!("chunk of length {} from buf of {:?}", chunk_size, buf);
