@@ -191,8 +191,10 @@ impl GearmanServer {
                                               service_remote.clone());
             let in_flight = Arc::new(Mutex::new(Vec::with_capacity(MAX_IN_FLIGHT_REQUESTS)));
             let dispatch = Dispatch::new(service, transport, in_flight.clone());
-            let pipeline = advanced::Multiplex::new(dispatch);
-            handle.spawn(pipeline.map_err(|_| ()));
+            let multiplex = advanced::Multiplex::new(dispatch);
+            handle.spawn(multiplex.map_err(|e| {
+                error!("Error while handling packets: {:?}", e);
+            }));
             Ok(())
         });
         core.run(server).unwrap();
