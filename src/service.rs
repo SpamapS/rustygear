@@ -148,26 +148,23 @@ impl GearmanService {
             .and_then(move |_| {
                 let mut worker = worker.lock().unwrap();
                 let ref mut worker = worker;
-                if queues.get_job(worker) {
-                    match worker.job() {
-                        Some(ref j) => {
-                            let mut data = BytesMut::with_capacity(4 + j.handle.len() +
-                                                                   j.fname.len() +
-                                                                   j.unique.len() +
-                                                                   j.data.len());
-                            data.extend(&j.handle);
-                            data.put_u8(b'\0');
-                            data.extend(&j.fname);
-                            data.put_u8(b'\0');
-                            data.extend(&j.unique);
-                            data.put_u8(b'\0');
-                            // reducer not implemented
-                            data.put_u8(b'\0');
-                            data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN_ALL, data.freeze())).boxed();
-                        }
-                        None => {}
+                match queues.get_job(worker) {
+                    Some(ref j) => {
+                        let mut data = BytesMut::with_capacity(4 + j.handle.len() + j.fname.len() +
+                                                               j.unique.len() +
+                                                               j.data.len());
+                        data.extend(&j.handle);
+                        data.put_u8(b'\0');
+                        data.extend(&j.fname);
+                        data.put_u8(b'\0');
+                        data.extend(&j.unique);
+                        data.put_u8(b'\0');
+                        // reducer not implemented
+                        data.put_u8(b'\0');
+                        data.extend(&j.data);
+                        return future::finished(new_res(JOB_ASSIGN_ALL, data.freeze())).boxed();
                     }
+                    None => {}
                 };
                 future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
@@ -182,25 +179,21 @@ impl GearmanService {
             .and_then(move |_| {
                 let mut worker = worker.lock().unwrap();
                 let ref mut worker = worker;
-                if queues.get_job(worker) {
-                    match worker.job() {
-                        Some(ref j) => {
-                            let mut data = BytesMut::with_capacity(3 + j.handle.len() +
-                                                                   j.fname.len() +
-                                                                   j.unique.len() +
-                                                                   j.data.len());
-                            data.extend(&j.handle);
-                            data.put_u8(b'\0');
-                            data.extend(&j.fname);
-                            data.put_u8(b'\0');
-                            data.extend(&j.unique);
-                            data.put_u8(b'\0');
-                            data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN_UNIQ, data.freeze()))
-                                .boxed();
-                        }
-                        None => {}
+                match queues.get_job(worker) {
+                    Some(ref j) => {
+                        let mut data = BytesMut::with_capacity(3 + j.handle.len() + j.fname.len() +
+                                                               j.unique.len() +
+                                                               j.data.len());
+                        data.extend(&j.handle);
+                        data.put_u8(b'\0');
+                        data.extend(&j.fname);
+                        data.put_u8(b'\0');
+                        data.extend(&j.unique);
+                        data.put_u8(b'\0');
+                        data.extend(&j.data);
+                        return future::finished(new_res(JOB_ASSIGN_UNIQ, data.freeze())).boxed();
                     }
+                    None => {}
                 };
                 future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
@@ -215,21 +208,18 @@ impl GearmanService {
             .and_then(move |_| {
                 let mut worker = worker.lock().unwrap();
                 let ref mut worker = worker;
-                if queues.get_job(worker) {
-                    match worker.job() {
-                        Some(ref j) => {
-                            let mut data = BytesMut::with_capacity(2 + j.handle.len() +
-                                                                   j.fname.len() +
-                                                                   j.data.len());
-                            data.extend(&j.handle);
-                            data.put_u8(b'\0');
-                            data.extend(&j.fname);
-                            data.put_u8(b'\0');
-                            data.extend(&j.data);
-                            return future::finished(new_res(JOB_ASSIGN, data.freeze())).boxed();
-                        }
-                        None => {}
+                match queues.get_job(worker) {
+                    Some(ref j) => {
+                        let mut data = BytesMut::with_capacity(2 + j.handle.len() + j.fname.len() +
+                                                               j.data.len());
+                        data.extend(&j.handle);
+                        data.put_u8(b'\0');
+                        data.extend(&j.fname);
+                        data.put_u8(b'\0');
+                        data.extend(&j.data);
+                        return future::finished(new_res(JOB_ASSIGN, data.freeze())).boxed();
                     }
+                    None => {}
                 };
                 future::finished(new_res(NO_JOB, Bytes::new())).boxed()
             })
@@ -385,12 +375,8 @@ impl GearmanService {
                         chunk.split_to(1); // Drop null
                         info!("Job is complete {:?}", handle);
                         let mut worker = worker.lock().unwrap();
-                        match worker.job() {
+                        match worker.get_assigned_job(&handle) {
                             Some(ref mut j) => {
-                                if j.handle != handle {
-                                    error!("WORK_COMPLETE received for job handle = {:?} but worker is assigned {:?}",
-                                           handle, j.handle)
-                                }
                                 let mut queues = queues.lock().unwrap();
                                 queues.remove_job(&j.unique);
                             }
@@ -398,7 +384,7 @@ impl GearmanService {
                                 error!("WORK_COMPLETE received but no active jobs");
                             }
                         }
-                        worker.unassign_job();
+                        worker.unassign_job(&handle);
                         // Now send this as first body chunk if there are senders
                         let mut job_body_senders = job_body_senders.lock().unwrap();
                         // We use remove so the senders get dropped and channels shut down after we

@@ -22,7 +22,7 @@ pub trait HandleJobStorage {
     fn new_job_storage() -> SharedJobStorage;
     fn coalesce_unique(&mut self, unique: &Bytes, remote: Option<usize>) -> Option<Bytes>;
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>);
-    fn get_job(&mut self, worker: &mut Worker) -> bool;
+    fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>>;
 }
 
 pub type JobQueuePriority = usize;
@@ -129,7 +129,7 @@ impl HandleJobStorage for SharedJobStorage {
         storage.queues.get_mut(&job.fname).unwrap()[priority].push_back(job.clone());
     }
 
-    fn get_job(&mut self, worker: &mut Worker) -> bool {
+    fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>> {
         let mut storage = self.lock().unwrap();
         let mut job: Option<Arc<Job>> = None;
         debug!("{:?}", &worker);
@@ -155,9 +155,9 @@ impl HandleJobStorage for SharedJobStorage {
         match job {
             Some(job) => {
                 worker.assign_job(&job);
-                true
+                Some(job)
             }
-            None => false,
+            None => None,
         }
     }
 }

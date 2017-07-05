@@ -145,14 +145,14 @@ impl Workers {
 #[derive(Debug)]
 pub struct Worker {
     pub functions: WrappingHashSet<Bytes>,
-    job: Option<Arc<Job>>,
+    jobs: HashMap<Bytes, Arc<Job>>,
 }
 
 impl Worker {
     pub fn new() -> Worker {
         Worker {
             functions: WrappingHashSet::new(),
-            job: None,
+            jobs: HashMap::new(),
         }
     }
 
@@ -169,12 +169,12 @@ impl Worker {
     }
 
     pub fn assign_job(&mut self, job: &Arc<Job>) {
-        self.job = Some(job.clone());
+        self.jobs.insert(job.handle.clone(), job.clone());
     }
 
-    pub fn unassign_job(&mut self) {
-        match self.job {
-            None => {}
+    pub fn unassign_job(&mut self, handle: &Bytes) {
+        match self.jobs.remove(handle) {
+            None => warn!("Worker was not assigned {:?}", handle),
             Some(ref j) => {
                 match Arc::weak_count(j) {
                     0 => {}
@@ -187,11 +187,9 @@ impl Worker {
                 }
             }
         }
-        self.job = None;
     }
 
-
-    pub fn job(&mut self) -> Option<Arc<Job>> {
-        self.job.clone()
+    pub fn get_assigned_job(&self, handle: &Bytes) -> Option<&Arc<Job>> {
+        self.jobs.get(handle)
     }
 }
