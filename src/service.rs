@@ -109,7 +109,7 @@ impl GearmanService {
                               ptype: ADMIN_RESPONSE,
                               psize: 0,
                           },
-                          Body::from(Bytes::new()))
+                          Body::empty())
     }
 
     fn handle_can_do(&self, body: GearmanBody) -> BoxFuture<GearmanMessage, io::Error> {
@@ -281,11 +281,13 @@ impl GearmanService {
         let remote = self.remote.clone();
         let (tx, response_body) = Body::pair();
         let job_body_senders = self.job_body_senders.clone();
+        trace!("  --> body = {:?}", body);
 
         let ret = body.concat2()
             .and_then(move |mut fields| {
                 let fname = next_field(&mut fields).unwrap();
                 let unique = next_field(&mut fields).unwrap();
+                trace!("  --> fname = {:?} unique = {:?}", fname, unique);
                 let mut add = false;
                 let handle = match queues.coalesce_unique(&unique, conn_id) {
                     Some(handle) => handle,
