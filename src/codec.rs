@@ -29,6 +29,15 @@ impl Clone for Packet {
 
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let unimpl = format!("__UNIMPLEMENTED__({})", self.ptype);
+        let ptype_str = match self.ptype {
+            p @ 0...42 => PTYPES[p as usize].name,
+            _p @ ADMIN_STATUS => "ADMIN_STATUS",
+            _p @ ADMIN_VERSION => "ADMIN_VERSION",
+            _p @ ADMIN_UNKNOWN => "ADMIN_UNKNOWN",
+            _p @ ADMIN_RESPONSE => "ADMIN_RESPONSE",
+            _ => &unimpl,
+        };
         write!(f,
                "Packet{{ magic: {:?}, ptype: {}, size: {} }}",
                match self.magic {
@@ -37,10 +46,7 @@ impl fmt::Debug for Packet {
                    PacketMagic::TEXT => "TEXT",
                    _ => "UNKNOWN",
                },
-               match self.ptype {
-                   p @ 0...42 => PTYPES[p as usize].name,
-                   _ => "__UNIMPLEMENTED__",
-               },
+               ptype_str,
                self.psize)
     }
 }
@@ -58,7 +64,8 @@ impl Packet {
                 Ok(s) => s,
                 Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "invalid string")),
             };
-            info!("admin command data: {:?}", data_str);
+            let trimmed = data_str.trim();
+            info!("admin command data: {:?}", trimmed);
             let command = match data_str.trim() {
                 "version" => ADMIN_VERSION,
                 "status" => ADMIN_STATUS,
@@ -124,9 +131,7 @@ impl Packet {
             PacketMagic::UNKNOWN => panic!("Unknown packet magic cannot be sent"),
             PacketMagic::REQ => REQ,
             PacketMagic::RES => RES,
-            PacketMagic::TEXT => {
-                return (Bytes::from_static(b""), Bytes::from_static(b""));
-            }
+            PacketMagic::TEXT => return (Bytes::from_static(b""), self.data),
         };
         let mut buf = BytesMut::with_capacity(12);
         buf.extend(magic.iter());

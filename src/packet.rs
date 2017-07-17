@@ -653,6 +653,14 @@ impl Packet {
 
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let unimpl = format!("__UNIMPLEMENTED__({})", self.ptype);
+        let ptype_str = match self.ptype {
+            p @ 0...42 => PTYPES[p as usize].name,
+            _p @ ADMIN_STATUS => "ADMIN_STATUS",
+            _p @ ADMIN_VERSION => "ADMIN_VERSION",
+            _p @ ADMIN_UNKNOWN => "ADMIN_UNKNOWN",
+            _ => &unimpl,
+        };
         write!(f,
                "Packet {{ magic: {:?}, ptype: {}, size: {}, remote: {:?} }}",
                match self.magic {
@@ -661,10 +669,7 @@ impl fmt::Debug for Packet {
                    PacketMagic::TEXT => "TEXT",
                    _ => "UNKNOWN",
                },
-               match self.ptype {
-                   p @ 0...42 => PTYPES[p as usize].name,
-                   _ => "__UNIMPLEMENTED__",
-               },
+               ptype_str,
                self.psize,
                self.remote)
     }

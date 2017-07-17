@@ -34,11 +34,13 @@ impl Future for MySinkSend {
     type Error = Error;
     fn poll(&mut self) -> Poll<(), Error> {
         let mut sink = self.sink.borrow_mut();
+        trace!("checking item");
         let to_send = match self.item {
             Ok(AsyncSink::NotReady(ref to_send)) => to_send.clone(),
             Ok(AsyncSink::Ready) => return sink.poll_complete(),
             Err(ref e) => panic!("Sink is broken: {:?}", e),
         };
+        trace!("calling start_send");
         self.item = sink.start_send(to_send);
         match self.item {
             Ok(AsyncSink::Ready) => sink.poll_complete(),
@@ -86,6 +88,7 @@ impl GearmanServer {
                 .boxed();
             let sink_cell = Rc::new(RefCell::new(sink));
             let writer = rx.for_each(move |to_send| {
+                trace!("Sending {:?}", &to_send);
                 let sender = MySinkSend {
                     sink: sink_cell.clone(),
                     item: sink_cell.borrow_mut().start_send(to_send),
