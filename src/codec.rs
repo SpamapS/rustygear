@@ -30,7 +30,7 @@ impl Clone for Packet {
 impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
-               "PacketHeader {{ magic: {:?}, ptype: {}, size: {} }}",
+               "Packet{{ magic: {:?}, ptype: {}, size: {} }}",
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",
@@ -109,11 +109,13 @@ impl Packet {
         if buf.len() < packet_len {
             return Ok(None);
         }
+        // Discard header bytes now
+        buf.split_to(12);
         Ok(Some(Packet {
             magic: magic,
             ptype: ptype,
             psize: psize,
-            data: buf.split_to(packet_len).freeze(),
+            data: buf.split_to(psize as usize).freeze(),
         }))
     }
 

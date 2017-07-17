@@ -225,6 +225,7 @@ impl GearmanService {
         let remote = self.remote.clone();
         let senders_by_conn_id = self.senders_by_conn_id.clone();
         let mut fields = packet.data.clone();
+        trace!("fields = {:?}", fields);
         let fname = next_field(&mut fields).unwrap();
         let unique = next_field(&mut fields).unwrap();
         trace!("  --> fname = {:?} unique = {:?}", fname, unique);
@@ -290,7 +291,6 @@ impl GearmanService {
         let handle = next_field(&mut fields).unwrap();
         let worker = self.worker.clone();
         let queues = self.queues.clone();
-        let remote = self.remote.clone();
         info!("Job is complete {:?}", handle);
         let mut worker = worker.lock().unwrap();
         match worker.get_assigned_job(&handle) {
