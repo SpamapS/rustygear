@@ -4,8 +4,8 @@ use std::ops::Drop;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::{future, Future, BoxFuture, Stream, Sink};
-use futures::sync::mpsc::{channel, Sender};
+use futures::{future, Future, BoxFuture, Sink};
+use futures::sync::mpsc::Sender;
 use tokio_core::reactor::Remote;
 use tokio_service::Service;
 
@@ -19,8 +19,6 @@ use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
 use constants::*;
 
-const WAKE_BACKLOG_SIZE: usize = 8;
-
 fn new_res(ptype: u32, data: Bytes) -> Packet {
     Packet {
         magic: PacketMagic::RES,
@@ -30,7 +28,11 @@ fn new_res(ptype: u32, data: Bytes) -> Packet {
     }
 }
 
-type JobBodySenders = Arc<Mutex<HashMap<Bytes, Vec<Sender<Result<Bytes, io::Error>>>>>>;
+fn new_noop() -> Packet {
+    new_res(NOOP, Bytes::new())
+}
+
+type SendersByConnId = Arc<Mutex<HashMap<usize, Sender<Packet>>>>;
 
 pub struct GearmanService {
     pub conn_id: usize,
@@ -38,8 +40,7 @@ pub struct GearmanService {
     pub workers: SharedWorkers,
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
-    pub connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
-    job_body_senders: JobBodySenders,
+    senders_by_conn_id: SendersByConnId,
     remote: Remote,
 }
 
@@ -89,8 +90,7 @@ impl GearmanService {
                queues: SharedJobStorage,
                workers: SharedWorkers,
                job_count: Arc<AtomicUsize>,
-               connections: Arc<Mutex<HashMap<usize, Sender<()>>>>,
-               job_body_senders: JobBodySenders,
+               senders_by_conn_id: SendersByConnId,
                remote: Remote)
                -> GearmanService {
         GearmanService {
@@ -99,8 +99,7 @@ impl GearmanService {
             worker: Arc::new(Mutex::new((Worker::new()))),
             workers: workers,
             job_count: job_count,
-            connections: connections,
-            job_body_senders: job_body_senders,
+            senders_by_conn_id: senders_by_conn_id,
             remote: remote,
         }
     }
@@ -208,29 +207,7 @@ impl GearmanService {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        // When we get woke, send a NOOP
-        let (tx, rx) = channel(WAKE_BACKLOG_SIZE);
-        {
-            let mut connections = self.connections.lock().unwrap();
-            connections.insert(self.conn_id, tx);
-        }
-        let resp = new_res(NOOP, Bytes::new());
-        // If there are more, they are pointless until the NOOP is queued, and once it is queued,
-        // the connections hashmap will have dropped the sender, and this future resolving
-        // should drop the receiver and all of its backed up items.
-        let connections = self.connections.clone();
-        let conn_id = self.conn_id;
-        rx.take(1)
-            .for_each(move |_| {
-                {
-                    let mut connections = connections.lock().unwrap();
-                    connections.remove(&conn_id);
-                }
-                Ok(())
-            })
-            .map_err(move |_| io::Error::new(io::ErrorKind::Other, "receiver error"))
-            .map(move |_| resp)
-            .boxed()
+        future::finished(Self::no_response()).boxed()
     }
 
     fn handle_submit_job(&self,
@@ -245,9 +222,8 @@ impl GearmanService {
         };
         let mut workers = self.workers.clone();
         let job_count = self.job_count.clone();
-        let connections = self.connections.clone();
         let remote = self.remote.clone();
-        let job_body_senders = self.job_body_senders.clone();
+        let senders_by_conn_id = self.senders_by_conn_id.clone();
         let mut fields = packet.data.clone();
         let fname = next_field(&mut fields).unwrap();
         let unique = next_field(&mut fields).unwrap();
@@ -257,16 +233,16 @@ impl GearmanService {
             Some(handle) => handle,
             None => {
                 {
-                    let mut connections = connections.lock().unwrap();
                     for wake in workers.queue_wake(&fname) {
-                        match connections.get_mut(&wake) {
+                        let senders_by_conn_id = senders_by_conn_id.lock().unwrap();
+                        match senders_by_conn_id.get(&wake) {
                             None => {
                                 debug!("No connection found to wake up for conn_id = {}", wake);
                             }
                             Some(tx) => {
                                 let tx = tx.clone();
                                 remote.spawn(move |handle| {
-                                    handle.spawn(tx.send(()).then(|res| {
+                                    handle.spawn(tx.send(new_noop()).then(|res| {
                                         match res {
                                             Ok(_) => {}
                                             Err(e) => error!("Send Error! {:?}", e),

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::{Async, Future, Sink, Stream, Poll};
 use futures::{future, AsyncSink, StartSend};
 use futures::sync::mpsc::channel;
-use tokio_io::{AsyncRead};
+use tokio_io::AsyncRead;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
@@ -55,24 +55,26 @@ impl GearmanServer {
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
-        let connections = Arc::new(Mutex::new(HashMap::new()));
-        let job_body_senders = Arc::new(Mutex::new(HashMap::new()));
+        let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let mut core = Core::new().unwrap();
         let handle = core.handle();
+        let remote = core.remote();
         let listener = TcpListener::bind(&addr, &handle).unwrap();
-        let service_remote = core.remote();
         let server = listener.incoming().for_each(move |(sock, _)| {
             let conn_id = curr_conn_id.clone().fetch_add(1, Ordering::Relaxed);
+            let (sink, stream) = sock.framed(PacketCodec).split();
+            let (tx, rx) = channel::<Packet>(MAX_UNHANDLED_OUT_FRAMES);
+            {
+                let mut senders_by_conn_id = senders_by_conn_id.lock().unwrap();
+                senders_by_conn_id.insert(conn_id, tx.clone());
+            }
             let service = GearmanService::new(conn_id,
                                               queues.clone(),
                                               workers.clone(),
                                               job_count.clone(),
-                                              connections.clone(),
-                                              job_body_senders.clone(),
-                                              service_remote.clone());
+                                              senders_by_conn_id.clone(),
+                                              remote.clone());
             // Read stuff, write if needed
-            let (sink, stream) = sock.framed(PacketCodec).split();
-            let (tx, rx) = channel::<Packet>(MAX_UNHANDLED_OUT_FRAMES);
             let reader = stream.for_each(move |frame| {
                     let tx = tx.clone();
                     service.call(frame)

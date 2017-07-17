@@ -74,8 +74,7 @@ impl Packet {
         Ok(None) // Wait for more data
     }
 
-    pub fn decode(buf: &mut BytesMut)
-                  -> Result<Option<Packet>, io::Error> {
+    pub fn decode(buf: &mut BytesMut) -> Result<Option<Packet>, io::Error> {
         debug!("Decoding {:?}", buf);
         // Peek at first 4
         // Is this a req/res
