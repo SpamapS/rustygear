@@ -1,25 +1,33 @@
-use std::cmp::min;
 use std::fmt;
 use std::io;
 use std::str;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bytes::{Bytes, BytesMut};
 use bytes::{IntoBuf, Buf, BufMut, BigEndian};
 use tokio_io::codec::{Encoder, Decoder};
-use tokio_proto::streaming::multiplex::{Frame, RequestId};
 
 use constants::*;
 use packet::{PacketMagic, PTYPES};
 
-pub struct PacketHeader {
+pub struct Packet {
     pub magic: PacketMagic,
     pub ptype: u32,
     pub psize: u32,
+    pub data: Bytes,
 }
 
-impl fmt::Debug for PacketHeader {
+impl Clone for Packet {
+    fn clone(&self) -> Packet {
+        Packet {
+            magic: self.magic,
+            ptype: self.ptype,
+            psize: self.psize,
+            data: self.data.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,
                "PacketHeader {{ magic: {:?}, ptype: {}, size: {} }}",
@@ -37,26 +45,11 @@ impl fmt::Debug for PacketHeader {
     }
 }
 
-pub struct PacketCodec {
-    data_todo: Option<usize>,
-    request_counter: Arc<AtomicUsize>,
-    active_request_id: RequestId,
-}
+#[derive(Debug)]
+pub struct PacketCodec;
 
-impl PacketCodec {
-    pub fn new(request_counter: Arc<AtomicUsize>) -> PacketCodec {
-        PacketCodec {
-            data_todo: None,
-            request_counter: request_counter,
-            active_request_id: 0,
-        }
-    }
-}
-
-pub type PacketItem = Frame<PacketHeader, Bytes, io::Error>;
-
-impl PacketHeader {
-    pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<PacketItem>, io::Error> {
+impl Packet {
+    pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<Packet>, io::Error> {
         let newline = buf[..].iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
             let line = buf.split_to(n);
@@ -71,23 +64,18 @@ impl PacketHeader {
                 "status" => ADMIN_STATUS,
                 _ => ADMIN_UNKNOWN,
             };
-            return Ok(Some(Frame::Message {
-                id: 0,
-                message: PacketHeader {
-                    magic: PacketMagic::TEXT,
-                    ptype: command,
-                    psize: 0,
-                },
-                body: false,
-                solo: false,
+            return Ok(Some(Packet {
+                magic: PacketMagic::TEXT,
+                ptype: command,
+                psize: 0,
+                data: Bytes::new(),
             }));
         }
         Ok(None) // Wait for more data
     }
 
-    pub fn decode(buf: &mut BytesMut,
-                  request_counter: &Arc<AtomicUsize>)
-                  -> Result<Option<PacketItem>, io::Error> {
+    pub fn decode(buf: &mut BytesMut)
+                  -> Result<Option<Packet>, io::Error> {
         debug!("Decoding {:?}", buf);
         // Peek at first 4
         // Is this a req/res
@@ -105,146 +93,74 @@ impl PacketHeader {
         debug!("Magic is {:?}", magic);
         if magic == PacketMagic::TEXT {
             debug!("admin protocol detected");
-            return PacketHeader::admin_decode(buf);
+            return Packet::admin_decode(buf);
         }
         if buf.len() < 12 {
             return Ok(None);
         }
-        buf.split_to(4);
+        trace!("Buf is >= 12 bytes ({})", buf.len());
+        //buf.split_to(4);
         // Now get the type
-        let ptype = buf.split_to(4).into_buf().get_u32::<BigEndian>();
+        let ptype = Bytes::from(&buf[4..8]).into_buf().get_u32::<BigEndian>();
         debug!("We got a {}", &PTYPES[ptype as usize].name);
         // Now the length
-        let psize = buf.split_to(4).into_buf().get_u32::<BigEndian>();
+        let psize = Bytes::from(&buf[8..12]).into_buf().get_u32::<BigEndian>();
         debug!("Data section is {} bytes", psize);
-        let solo = match ptype {
-            SUBMIT_JOB |
-            SUBMIT_JOB_LOW |
-            SUBMIT_JOB_HIGH |
-            SUBMIT_REDUCE_JOB => false,
-            GRAB_JOB | GRAB_JOB_UNIQ | GRAB_JOB_ALL => false,
-            GET_STATUS |
-            GET_STATUS_UNIQUE => false,
-            _ => false,  // TODO: when we figure out how to Service::call on these, set to true
-        };
-        let req_id: RequestId = if solo {
-            0
-        } else {
-            request_counter.fetch_add(1, Ordering::Relaxed) as RequestId
-        };
-        debug!("{} left in buf: {:?}", buf.len(), buf);
-        Ok(Some(Frame::Message {
-            id: req_id,
-            message: PacketHeader {
-                magic: magic,
-                ptype: ptype,
-                psize: psize,
-            },
-            body: true, // TODO: false for 0 psize?
-            solo: solo,
+        let packet_len = 12 + psize as usize;
+        if buf.len() < packet_len {
+            return Ok(None);
+        }
+        Ok(Some(Packet {
+            magic: magic,
+            ptype: ptype,
+            psize: psize,
+            data: buf.split_to(packet_len).freeze(),
         }))
     }
 
-    pub fn to_bytes(&self) -> Bytes {
+    pub fn into_bytes(self) -> (Bytes, Bytes) {
         let magic = match self.magic {
             PacketMagic::UNKNOWN => panic!("Unknown packet magic cannot be sent"),
             PacketMagic::REQ => REQ,
             PacketMagic::RES => RES,
             PacketMagic::TEXT => {
-                return Bytes::from_static(b"");
+                return (Bytes::from_static(b""), Bytes::from_static(b""));
             }
         };
         let mut buf = BytesMut::with_capacity(12);
         buf.extend(magic.iter());
         buf.put_u32::<BigEndian>(self.ptype);
         buf.put_u32::<BigEndian>(self.psize);
-        buf.freeze()
+        (buf.freeze(), self.data)
     }
 
-    pub fn new_text_res(body: &Bytes) -> PacketHeader {
-        PacketHeader {
+    pub fn new_text_res(body: Bytes) -> Packet {
+        Packet {
             magic: PacketMagic::TEXT,
             ptype: ADMIN_RESPONSE,
             psize: body.len() as u32,
+            data: body,
         }
     }
 }
 
 impl Decoder for PacketCodec {
-    type Item = Frame<PacketHeader, Bytes, io::Error>;
+    type Item = Packet;
     type Error = io::Error;
 
     fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        match self.data_todo {
-            None => {
-                match PacketHeader::decode(buf, &self.request_counter)? {
-                    Some(Frame::Message { id, message, body, solo }) => {
-                        self.active_request_id = id;
-                        self.data_todo = Some(message.psize as usize);
-                        Ok(Some(Frame::Message {
-                            id: id,
-                            message: message,
-                            body: body,
-                            solo: solo,
-                        }))
-                    }
-                    Some(_) => panic!("Expecting Frame::Message, got something else"),
-                    None => Ok(None),
-                }
-            }
-            Some(0) => {
-                self.data_todo = None;
-                Ok(Some(Frame::Body {
-                    id: self.active_request_id,
-                    chunk: None,
-                }))
-            }
-            Some(data_todo) => {
-                let chunk_size = min(buf.len(), data_todo);
-                if chunk_size == 0 {
-                    debug!("0 length chunk? buf.len() = {} data_todo = {}",
-                           buf.len(),
-                           data_todo);
-                    Ok(None)
-                } else {
-                    trace!("chunk of length {} from buf of {:?}", chunk_size, buf);
-                    self.data_todo = Some(data_todo - chunk_size);
-                    Ok(Some(Frame::Body {
-                        id: self.active_request_id,
-                        chunk: Some(buf.split_to(chunk_size).freeze()),
-                    }))
-                }
-            }
-        }
+        Packet::decode(buf)
     }
 }
 
 impl Encoder for PacketCodec {
-    type Item = Frame<PacketHeader, Bytes, io::Error>;
+    type Item = Packet;
     type Error = io::Error;
 
-    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> io::Result<()> {
-        debug!("Encoding {:?}", msg);
-        match msg {
-            Frame::Message { id, message, body, solo } => {
-                trace!("Encoding header for id={} solo={}", id, solo);
-                if body {
-                    debug!("body follows")
-                }
-                buf.extend(message.to_bytes())
-            }
-            Frame::Body { id, chunk } => {
-                trace!("Encoding body for id={}", id);
-                match chunk {
-                    Some(chunk) => buf.extend_from_slice(&chunk[..]),
-                    None => {}
-                }
-            }
-            Frame::Error { id, error } => {
-                error!("Sending error frame for id={}. {}", id, error);
-                buf.extend("ERR UNKNOWN_COMMAND Unknown+server+command".bytes())
-            }
-        }
+    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> Result<(), io::Error> {
+        let allbytes = msg.into_bytes();
+        buf.extend(allbytes.0);
+        buf.extend(allbytes.1);
         Ok(())
     }
 }

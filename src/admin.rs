@@ -1,12 +1,10 @@
-use tokio_proto::streaming::{Message, Body};
 use bytes::BytesMut;
 
-use codec::PacketHeader;
-use service::GearmanMessage;
+use codec::Packet;
 use queues::SharedJobStorage;
 use worker::{SharedWorkers, Wake};
 
-pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -> GearmanMessage {
+pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
     let mut response = BytesMut::with_capacity(1024 * 1024); // XXX Wild guess.
     let storage = storage.lock().unwrap();
     let queues = storage.queues();
@@ -25,5 +23,5 @@ pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -
     }
     response.extend(b".\n");
     let response = response.freeze();
-    Message::WithBody(PacketHeader::new_text_res(&response), Body::from(response))
+    Packet::new_text_res(response)
 }
