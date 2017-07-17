@@ -108,13 +108,15 @@ impl HandleJobStorage for SharedJobStorage {
 
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
         let mut storage = self.lock().unwrap();
-        if !storage.queues.contains_key(&job.fname) {
-            let high_queue = VecDeque::new();
-            let norm_queue = VecDeque::new();
-            let low_queue = VecDeque::new();
-            storage.queues.insert(job.fname.clone(), [high_queue, norm_queue, low_queue]);
+        {
+            let func_queues = storage.queues.entry(job.fname.clone()).or_insert_with(|| {
+                let high_queue = VecDeque::new();
+                let norm_queue = VecDeque::new();
+                let low_queue = VecDeque::new();
+                [high_queue, norm_queue, low_queue]
+            });
+            func_queues[priority].push_back(job.clone());
         }
-        storage.jobs.insert(job.unique.clone(), job.clone());
         let mut remotes_by_unique = HashSet::with_capacity(INIT_JOB_REMOTES_CAPACITY);
         let mut remotes_by_handle = Vec::with_capacity(INIT_JOB_REMOTES_CAPACITY);
         match remote {
@@ -126,7 +128,6 @@ impl HandleJobStorage for SharedJobStorage {
         }
         storage.remotes_by_unique.insert(job.unique.clone(), remotes_by_unique);
         storage.remotes_by_handle.insert(job.handle.clone(), remotes_by_handle);
-        storage.queues.get_mut(&job.fname).unwrap()[priority].push_back(job.clone());
     }
 
     fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>> {
