@@ -32,6 +32,7 @@ fn new_noop() -> Packet {
     new_res(NOOP, Bytes::new())
 }
 
+type JobWaiters = Arc<Mutex<HashMap<Bytes, Vec<usize>>>>;
 type SendersByConnId = Arc<Mutex<HashMap<usize, Sender<Packet>>>>;
 
 pub struct GearmanService {
@@ -41,6 +42,7 @@ pub struct GearmanService {
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
     senders_by_conn_id: SendersByConnId,
+    job_waiters: JobWaiters,
     remote: Remote,
 }
 
@@ -62,6 +64,7 @@ impl Drop for GearmanService {
         debug!("Dropped conn_id = {}", self.conn_id);
     }
 }
+
 
 impl GearmanService {
     /// Things that don't require a body should use this
@@ -86,11 +89,34 @@ impl GearmanService {
         }
     }
 
+    fn send_to_conn_id(&self, conn_id: usize, packet: Packet) {
+        let senders_by_conn_id = self.senders_by_conn_id.lock().unwrap();
+        match senders_by_conn_id.get(&conn_id) {
+            None => {
+                panic!("No connection found for conn_id = {}", &conn_id); // XXX You can do better
+            }
+            Some(tx) => {
+                let tx = tx.clone();
+                self.remote.spawn(move |handle| {
+                    handle.spawn(tx.send(packet).then(|res| {
+                        match res {
+                            Ok(_) => {}
+                            Err(e) => error!("Send Error! {:?}", e),
+                        }
+                        Ok(())
+                    }));
+                    Ok(())
+                });
+            }
+        }
+    }
+
     pub fn new(conn_id: usize,
                queues: SharedJobStorage,
                workers: SharedWorkers,
                job_count: Arc<AtomicUsize>,
                senders_by_conn_id: SendersByConnId,
+               job_waiters: JobWaiters,
                remote: Remote)
                -> GearmanService {
         GearmanService {
@@ -100,6 +126,7 @@ impl GearmanService {
             workers: workers,
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,
+            job_waiters: job_waiters,
             remote: remote,
         }
     }
@@ -274,7 +301,10 @@ impl GearmanService {
         // stream should end thus releasing the waiter immediately.
         let psize = handle.len() as u32;
         if wait {
-            error!("We can't wait anymore oops");
+            // Fetch our sender
+            let mut job_waiters = self.job_waiters.lock().unwrap();
+            let mut waiters = job_waiters.entry(handle.clone()).or_insert(Vec::new());
+            waiters.push(self.conn_id);
         }
         future::finished(Packet {
                 magic: PacketMagic::RES,
@@ -303,6 +333,13 @@ impl GearmanService {
             }
         }
         worker.unassign_job(&handle);
+        let mut job_waiters = self.job_waiters.lock().unwrap();
+        // If there are waiters, send the packet to them
+        if let Some(waiters) = job_waiters.remove(&handle) {
+            for conn_id in waiters.iter() {
+                self.send_to_conn_id(*conn_id, packet.clone());
+            }
+        }
         future::finished(Self::no_response()).boxed()
     }
 }

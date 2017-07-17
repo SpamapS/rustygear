@@ -56,6 +56,7 @@ impl GearmanServer {
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
+        let job_waiters = Arc::new(Mutex::new(HashMap::new()));
         let mut core = Core::new().unwrap();
         let handle = core.handle();
         let remote = core.remote();
@@ -73,6 +74,7 @@ impl GearmanServer {
                                               workers.clone(),
                                               job_count.clone(),
                                               senders_by_conn_id.clone(),
+                                              job_waiters.clone(),
                                               remote.clone());
             // Read stuff, write if needed
             let reader = stream.for_each(move |frame| {
