@@ -92,6 +92,7 @@ fn test_packet_debug() {
 fn test_packet_debug_unimplemented() {
     let p = Packet::new_res((PTYPES.len() + 10) as u32, Box::new(Vec::new()));
     let f = format!("->{:?}<-", p);
-    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__, size: 0, remote: None }<-",
+    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__(53), size: 0, remote: None \
+                }<-",
                &f);
 }

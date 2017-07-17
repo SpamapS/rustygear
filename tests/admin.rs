@@ -6,8 +6,6 @@ extern crate rustygear;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{Async, Stream};
-use tokio_proto::streaming::Message;
 
 use rustygear::admin::admin_command_status;
 use rustygear::constants::*;
@@ -27,28 +25,14 @@ fn admin_command_status_1job() {
     let mut workers = SharedWorkers::new_workers();
     storage.add_job(Arc::new(j), PRIORITY_NORMAL, None);
     workers.sleep(&mut w, 1);
-    match admin_command_status(storage, workers) {
-        Message::WithoutBody(_) => panic!("Wrong type, expected WithoutBody"),
-        Message::WithBody(_, mut body) => {
-            match body.poll() {
-                Ok(Async::Ready(Some(chunk))) => assert_eq!(b"f\t1\t0\t1\n.\n", &chunk[..]),
-                _ => panic!("Unexpected response to poll!"),
-            }
-        }
-    }
+    let packet = admin_command_status(storage, workers);
+    assert_eq!(b"f\t1\t0\t1\n.\n", &packet.data[..])
 }
 
 #[test]
 fn admin_command_status_empty() {
     let storage = SharedJobStorage::new_job_storage();
     let workers = SharedWorkers::new_workers();
-    match admin_command_status(storage, workers) {
-        Message::WithoutBody(_) => panic!("Wrong type, expected WithoutBody"),
-        Message::WithBody(_, mut body) => {
-            match body.poll() {
-                Ok(Async::Ready(Some(chunk))) => assert_eq!(b".\n", &chunk[..]),
-                _ => panic!("Unexpected result when calling poll"),
-            }
-        }
-    }
+    let packet = admin_command_status(storage, workers);
+    assert_eq!(b".\n", &packet.data[..]);
 }
