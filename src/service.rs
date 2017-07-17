@@ -315,7 +315,7 @@ impl GearmanService {
             .boxed()
     }
 
-    fn handle_work_complete(&self, packet: Packet) -> BoxFuture<Packet, io::Error> {
+    fn handle_work_complete(&self, packet: &Packet) -> BoxFuture<Packet, io::Error> {
         // Search for handle
         let mut fields = packet.data.clone();
         let handle = next_field(&mut fields).unwrap();
@@ -336,6 +336,18 @@ impl GearmanService {
         let mut job_waiters = self.job_waiters.lock().unwrap();
         // If there are waiters, send the packet to them
         if let Some(waiters) = job_waiters.remove(&handle) {
+            for conn_id in waiters.iter() {
+                self.send_to_conn_id(*conn_id, packet.clone());
+            }
+        }
+        future::finished(Self::no_response()).boxed()
+    }
+
+    fn handle_work_update(&self, packet: &Packet) -> BoxFuture<Packet, io::Error> {
+        let mut fields = packet.data.clone();
+        let handle = next_field(&mut fields).unwrap();
+        let job_waiters = self.job_waiters.lock().unwrap();
+        if let Some(waiters) = job_waiters.get(&handle) {
             for conn_id in waiters.iter() {
                 self.send_to_conn_id(*conn_id, packet.clone());
             }
@@ -366,8 +378,8 @@ impl Service for GearmanService {
             GRAB_JOB => self.handle_grab_job(),
             GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
             GRAB_JOB_ALL => self.handle_grab_job_all(),
-            WORK_COMPLETE => self.handle_work_complete(req),/*
-            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(),
+            WORK_COMPLETE => self.handle_work_complete(&req),
+            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),/*
                     ECHO_REQ => self.handle_echo_req(&req),*/
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
