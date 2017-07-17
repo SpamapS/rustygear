@@ -379,8 +379,8 @@ impl Service for GearmanService {
             GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
             GRAB_JOB_ALL => self.handle_grab_job_all(),
             WORK_COMPLETE => self.handle_work_complete(&req),
-            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),/*
-            ECHO_REQ => self.handle_echo_req(&req),*/
+            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
+            ECHO_REQ => future::finished(new_res(ECHO_RES, req.data)).boxed(),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
                 future::err(io::Error::new(io::ErrorKind::Other,
