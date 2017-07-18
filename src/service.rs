@@ -296,6 +296,7 @@ impl GearmanService {
             let job = Arc::new(Job::new(fname, unique, fields, handle.clone()));
             info!("Created job {:?}", job);
             queues.add_job(job.clone(), priority, conn_id);
+            trace!("job weak = {} strong = {}", Arc::weak_count(&job), Arc::strong_count(&job));
         }
         // If we don't store any senders, the sender will be dropped and the rx
         // stream should end thus releasing the waiter immediately.

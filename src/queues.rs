@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
@@ -6,7 +6,7 @@ use bytes::Bytes;
 use job::Job;
 use worker::Worker;
 
-pub type JobQueue = VecDeque<Arc<Job>>;
+pub type JobQueue = VecDeque<Weak<Job>>;
 pub type JobQueues = HashMap<Bytes, [JobQueue; 3]>;
 
 pub struct JobStorage {
@@ -107,6 +107,8 @@ impl HandleJobStorage for SharedJobStorage {
 
 
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
+        let job = job.clone();
+        trace!("job {:?} weak = {} strong = {}", &job, Arc::weak_count(&job), Arc::strong_count(&job));
         let mut storage = self.lock().unwrap();
         {
             let func_queues = storage.queues.entry(job.fname.clone()).or_insert_with(|| {
@@ -115,8 +117,10 @@ impl HandleJobStorage for SharedJobStorage {
                 let low_queue = VecDeque::new();
                 [high_queue, norm_queue, low_queue]
             });
-            func_queues[priority].push_back(job.clone());
+            func_queues[priority].push_back(Arc::downgrade(&job.clone()));
         }
+        storage.jobs.insert(job.unique.clone(), job.clone());
+        trace!("job {:?} weak = {} strong = {}", &job, Arc::weak_count(&job), Arc::strong_count(&job));
         let mut remotes_by_unique = HashSet::with_capacity(INIT_JOB_REMOTES_CAPACITY);
         let mut remotes_by_handle = Vec::with_capacity(INIT_JOB_REMOTES_CAPACITY);
         match remote {
@@ -128,6 +132,7 @@ impl HandleJobStorage for SharedJobStorage {
         }
         storage.remotes_by_unique.insert(job.unique.clone(), remotes_by_unique);
         storage.remotes_by_handle.insert(job.handle.clone(), remotes_by_handle);
+        trace!("job {:?} weak = {} strong = {}", &job, Arc::weak_count(&job), Arc::strong_count(&job));
     }
 
     fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>> {
@@ -144,9 +149,22 @@ impl HandleJobStorage for SharedJobStorage {
                     for q in prios {
                         debug!("searching priority {}", i);
                         i = i + 1;
-                        if !q.is_empty() {
+                        loop {
                             debug!("Queue has items! {:?}", q.len());
-                            job = q.pop_front();
+                            match q.pop_front() {
+                                None => break,
+                                Some(a_job) => {
+                                    match a_job.upgrade() {
+                                        None => trace!("Deleted job encountered."),
+                                        Some(a_job) => {
+                                            job = Some(a_job);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if job.is_some() {
                             break;
                         }
                     }
