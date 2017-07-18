@@ -3,6 +3,7 @@ use std::io;
 use std::ops::Drop;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::RefCell;
 
 use futures::{future, Future, BoxFuture, Sink};
 use futures::sync::mpsc::Sender;
@@ -44,6 +45,7 @@ pub struct GearmanService {
     senders_by_conn_id: SendersByConnId,
     job_waiters: JobWaiters,
     remote: Remote,
+    client_id: RefCell<Bytes>,
 }
 
 pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
@@ -131,6 +133,7 @@ impl GearmanService {
             senders_by_conn_id: senders_by_conn_id,
             job_waiters: job_waiters,
             remote: remote,
+            client_id: RefCell::new(Bytes::new()),
         }
     }
 
@@ -360,6 +363,13 @@ impl GearmanService {
         }
         future::finished(Self::no_response()).boxed()
     }
+
+    fn handle_set_client_id(&self, packet: &Packet) -> BoxFuture<Packet, io::Error> {
+        let d = packet.data.clone();
+        let mut client_id = self.client_id.borrow_mut();
+        *client_id = d;
+        future::finished(Self::no_response()).boxed()
+    }
 }
 
 impl Service for GearmanService {
@@ -369,7 +379,7 @@ impl Service for GearmanService {
     type Future = BoxFuture<Self::Response, Self::Error>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        debug!("Got a req {:?}", req);
+        debug!("[{:?}] Got a req {:?}", self.client_id.borrow(), req);
         match req.ptype {
             ADMIN_VERSION | ADMIN_STATUS => future::ok(self.response_from_packet(&req)).boxed(),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
@@ -386,6 +396,7 @@ impl Service for GearmanService {
             GRAB_JOB_ALL => self.handle_grab_job_all(),
             WORK_COMPLETE => self.handle_work_complete(&req),
             WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
+            SET_CLIENT_ID => self.handle_set_client_id(&req),
             ECHO_REQ => future::finished(new_res(ECHO_RES, req.data)).boxed(),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
