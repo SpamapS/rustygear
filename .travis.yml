@@ -9,3 +9,7 @@ script:
   cargo fmt -- --write-mode=diff &&
   cargo build &&
   cargo test
+  cd rustygeard
+  cargo fmt -- --write-mode=diff &&
+  cargo build &&
+  cargo test
