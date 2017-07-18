@@ -1,4 +1,5 @@
 extern crate rustygear;
+extern crate rustygeard;
 extern crate bytes;
 
 use std::str;
@@ -6,8 +7,9 @@ use std::str;
 use bytes::Bytes;
 
 use rustygear::constants::*;
-use rustygear::service::{next_field, new_res};
 use rustygear::packet::PTYPES;
+
+use rustygeard::service::{next_field, new_res};
 
 #[test]
 fn test_next_binary_data() {
