@@ -1,6 +1,5 @@
 extern crate bytes;
 extern crate futures;
-extern crate tokio_proto;
 extern crate rustygear;
 
 use std::sync::Arc;

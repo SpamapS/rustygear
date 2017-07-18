@@ -14,7 +14,6 @@ mio = "0.6"
 wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }
 memchr = "*"
 tokio-core = "*"
-tokio-proto = "*"
 tokio-io = "*"
 tokio-service = "*"
 futures = "*"
