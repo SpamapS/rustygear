@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
-use job::Job;
+use rustygear::job::Job;
 
 #[derive(Debug)]
 pub struct WorkerSet {

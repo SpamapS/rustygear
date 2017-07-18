@@ -3,10 +3,11 @@ extern crate log;
 extern crate env_logger;
 
 extern crate rustygear;
+extern crate rustygeard;
 extern crate tokio_core;
 
 
-use rustygear::server::GearmanServer;
+use rustygeard::server::GearmanServer;
 
 fn main() {
     env_logger::init().unwrap();

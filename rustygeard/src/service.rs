@@ -12,13 +12,14 @@ use tokio_service::Service;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
+use rustygear::codec::Packet;
+use rustygear::constants::*;
+use rustygear::job::Job;
+use rustygear::packet::PacketMagic;
+
 use admin;
-use codec::Packet;
-use job::Job;
-use packet::PacketMagic;
 use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
-use constants::*;
 
 pub fn new_res(ptype: u32, data: Bytes) -> Packet {
     Packet {

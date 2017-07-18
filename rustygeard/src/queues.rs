@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
 
-use job::Job;
+use rustygear::job::Job;
+
 use worker::Worker;
 
 pub type JobQueue = VecDeque<Weak<Job>>;
