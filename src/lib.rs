@@ -1,8 +1,6 @@
 #[macro_use]
 extern crate log;
-extern crate byteorder;
 extern crate bytes;
-extern crate memchr;
 extern crate mio;
 extern crate tokio_core;
 extern crate tokio_io;

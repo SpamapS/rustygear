@@ -5,14 +5,12 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
 time = "0.1"
-byteorder = "0.3"
 bytes = "*"
 hash_ring = "*"
 log = "*"
 env_logger = "*"
 mio = "0.6"
 wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }
-memchr = "*"
 tokio-core = "*"
 tokio-io = "*"
 tokio-service = "*"
