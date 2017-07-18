@@ -17,13 +17,8 @@ pub struct ClientJob {
     unique: Bytes,
     data: Bytes,
     handle: Option<Bytes>,
-    servers: Vec<Bytes>,
 }
 
-
-trait AddServer<T> {
-    fn add_server(&mut self, server: T);
-}
 
 impl ClientJob {
     pub fn new(fname: Bytes, data: Bytes, unique: Option<Bytes>) -> ClientJob {
@@ -36,16 +31,33 @@ impl ClientJob {
             unique: unique,
             data: data,
             handle: None,
-            servers: Vec::new(),
         }
     }
 }
 
-impl<T> AddServer<T> for ClientJob
+pub struct Client {
+    client_id: Option<Bytes>,
+    servers: Vec<Bytes>,
+}
+
+trait AddServer<T> {
+    fn add_server(&mut self, server: T);
+}
+
+impl<T> AddServer<T> for Client
 where
     T: Into<Bytes>,
 {
     fn add_server(&mut self, server: T) {
         self.servers.push(server.into())
+    }
+}
+
+impl Client {
+    pub fn new(client_id: Option<Bytes>) -> Client {
+        Client {
+            client_id: client_id,
+            servers: Vec::new(),
+        }
     }
 }
