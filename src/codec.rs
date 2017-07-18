@@ -39,7 +39,7 @@ impl fmt::Debug for Packet {
             _ => &unimpl,
         };
         write!(f,
-               "Packet{{ magic: {:?}, ptype: {}, size: {} }}",
+               "Packet {{ magic: {:?}, ptype: {}, size: {} }}",
                match self.magic {
                    PacketMagic::REQ => "REQ",
                    PacketMagic::RES => "RES",

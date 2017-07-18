@@ -19,7 +19,7 @@ use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use worker::{SharedWorkers, Worker, Wake};
 use constants::*;
 
-fn new_res(ptype: u32, data: Bytes) -> Packet {
+pub fn new_res(ptype: u32, data: Bytes) -> Packet {
     Packet {
         magic: PacketMagic::RES,
         ptype: ptype,
@@ -46,14 +46,17 @@ pub struct GearmanService {
     remote: Remote,
 }
 
-fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
+pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
     match buf[..].iter().position(|b| *b == b'\0') {
         Some(null_pos) => {
             let value = buf.split_to(null_pos);
             buf.split_to(1);
             Ok(value)
         }
-        None => Err(io::Error::new(io::ErrorKind::Other, "Can't find null")),
+        None => {
+            let buflen = buf.len();
+            Ok(buf.split_to(buflen))
+        }
     }
 }
 
@@ -296,7 +299,9 @@ impl GearmanService {
             let job = Arc::new(Job::new(fname, unique, fields, handle.clone()));
             info!("Created job {:?}", job);
             queues.add_job(job.clone(), priority, conn_id);
-            trace!("job weak = {} strong = {}", Arc::weak_count(&job), Arc::strong_count(&job));
+            trace!("job weak = {} strong = {}",
+                   Arc::weak_count(&job),
+                   Arc::strong_count(&job));
         }
         // If we don't store any senders, the sender will be dropped and the rx
         // stream should end thus releasing the waiter immediately.
