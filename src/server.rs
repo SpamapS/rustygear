@@ -71,18 +71,22 @@ impl GearmanServer {
                 let mut senders_by_conn_id = senders_by_conn_id.lock().unwrap();
                 senders_by_conn_id.insert(conn_id, tx.clone());
             }
-            let service = GearmanService::new(conn_id,
-                                              queues.clone(),
-                                              workers.clone(),
-                                              job_count.clone(),
-                                              senders_by_conn_id.clone(),
-                                              job_waiters.clone(),
-                                              remote.clone());
+            let service = GearmanService::new(
+                conn_id,
+                queues.clone(),
+                workers.clone(),
+                job_count.clone(),
+                senders_by_conn_id.clone(),
+                job_waiters.clone(),
+                remote.clone(),
+            );
             // Read stuff, write if needed
-            let reader = stream.for_each(move |frame| {
+            let reader = stream
+                .for_each(move |frame| {
                     let tx = tx.clone();
-                    service.call(frame)
-                        .and_then(move |response| tx.send(response).then(|_| future::ok(())))
+                    service.call(frame).and_then(move |response| {
+                        tx.send(response).then(|_| future::ok(()))
+                    })
                 })
                 .map_err(|_| {})
                 .boxed();

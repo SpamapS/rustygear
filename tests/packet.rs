@@ -38,7 +38,9 @@ fn test_packet_debug() {
 fn test_packet_debug_unimplemented() {
     let p = new_res((PTYPES.len() + 10) as u32, Bytes::new());
     let f = format!("->{:?}<-", p);
-    assert_eq!("->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__(53), size: 0 \
+    assert_eq!(
+        "->Packet { magic: \"RES\", ptype: __UNIMPLEMENTED__(53), size: 0 \
                 }<-",
-               &f);
+        &f
+    );
 }

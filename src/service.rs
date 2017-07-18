@@ -88,8 +88,10 @@ impl GearmanService {
             }
             ADMIN_STATUS => admin::admin_command_status(self.queues.clone(), self.workers.clone()),
             _ => {
-                panic!("response_from_packet called with invalid ptype: {}",
-                       packet.ptype)
+                panic!(
+                    "response_from_packet called with invalid ptype: {}",
+                    packet.ptype
+                )
             }
         }
     }
@@ -116,14 +118,15 @@ impl GearmanService {
         }
     }
 
-    pub fn new(conn_id: usize,
-               queues: SharedJobStorage,
-               workers: SharedWorkers,
-               job_count: Arc<AtomicUsize>,
-               senders_by_conn_id: SendersByConnId,
-               job_waiters: JobWaiters,
-               remote: Remote)
-               -> GearmanService {
+    pub fn new(
+        conn_id: usize,
+        queues: SharedJobStorage,
+        workers: SharedWorkers,
+        job_count: Arc<AtomicUsize>,
+        senders_by_conn_id: SendersByConnId,
+        job_waiters: JobWaiters,
+        remote: Remote,
+    ) -> GearmanService {
         GearmanService {
             conn_id: conn_id,
             queues: queues,
@@ -172,9 +175,9 @@ impl GearmanService {
         let ref mut worker = worker;
         match queues.get_job(worker) {
             Some(ref j) => {
-                let mut data = BytesMut::with_capacity(4 + j.handle.len() + j.fname.len() +
-                                                       j.unique.len() +
-                                                       j.data.len());
+                let mut data = BytesMut::with_capacity(
+                    4 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len(),
+                );
                 data.extend(&j.handle);
                 data.put_u8(b'\0');
                 data.extend(&j.fname);
@@ -198,9 +201,9 @@ impl GearmanService {
         let ref mut worker = worker;
         match queues.get_job(worker) {
             Some(ref j) => {
-                let mut data = BytesMut::with_capacity(3 + j.handle.len() + j.fname.len() +
-                                                       j.unique.len() +
-                                                       j.data.len());
+                let mut data = BytesMut::with_capacity(
+                    3 + j.handle.len() + j.fname.len() + j.unique.len() + j.data.len(),
+                );
                 data.extend(&j.handle);
                 data.put_u8(b'\0');
                 data.extend(&j.fname);
@@ -222,8 +225,8 @@ impl GearmanService {
         let ref mut worker = worker;
         match queues.get_job(worker) {
             Some(ref j) => {
-                let mut data = BytesMut::with_capacity(2 + j.handle.len() + j.fname.len() +
-                                                       j.data.len());
+                let mut data =
+                    BytesMut::with_capacity(2 + j.handle.len() + j.fname.len() + j.data.len());
                 data.extend(&j.handle);
                 data.put_u8(b'\0');
                 data.extend(&j.fname);
@@ -243,11 +246,12 @@ impl GearmanService {
         future::finished(Self::no_response()).boxed()
     }
 
-    fn handle_submit_job(&self,
-                         priority: JobQueuePriority,
-                         wait: bool,
-                         packet: Packet)
-                         -> BoxFuture<Packet, io::Error> {
+    fn handle_submit_job(
+        &self,
+        priority: JobQueuePriority,
+        wait: bool,
+        packet: Packet,
+    ) -> BoxFuture<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let conn_id = match wait {
             true => Some(self.conn_id),
@@ -302,9 +306,11 @@ impl GearmanService {
             let job = Arc::new(Job::new(fname, unique, fields, handle.clone()));
             info!("Created job {:?}", job);
             queues.add_job(job.clone(), priority, conn_id);
-            trace!("job weak = {} strong = {}",
-                   Arc::weak_count(&job),
-                   Arc::strong_count(&job));
+            trace!(
+                "job weak = {} strong = {}",
+                Arc::weak_count(&job),
+                Arc::strong_count(&job)
+            );
         }
         // If we don't store any senders, the sender will be dropped and the rx
         // stream should end thus releasing the waiter immediately.
@@ -316,12 +322,11 @@ impl GearmanService {
             waiters.push(self.conn_id);
         }
         future::finished(Packet {
-                magic: PacketMagic::RES,
-                ptype: JOB_CREATED,
-                psize: psize,
-                data: handle,
-            })
-            .boxed()
+            magic: PacketMagic::RES,
+            ptype: JOB_CREATED,
+            psize: psize,
+            data: handle,
+        }).boxed()
     }
 
     fn handle_work_complete(&self, packet: &Packet) -> BoxFuture<Packet, io::Error> {
@@ -400,9 +405,10 @@ impl Service for GearmanService {
             ECHO_REQ => future::finished(new_res(ECHO_RES, req.data)).boxed(),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
-                future::err(io::Error::new(io::ErrorKind::Other,
-                                           format!("Invalid packet type {}", req.ptype)))
-                    .boxed()
+                future::err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Invalid packet type {}", req.ptype),
+                )).boxed()
             }
         }
     }

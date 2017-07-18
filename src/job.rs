@@ -28,11 +28,13 @@ impl Drop for Job {
 
 impl fmt::Debug for Job {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "Job {{ handle: {}, fname: {}, unique: {}, +{} data }}",
-               String::from_utf8_lossy(&self.handle),
-               String::from_utf8_lossy(&self.fname),
-               String::from_utf8_lossy(&self.unique),
-               self.data.len())
+        write!(
+            f,
+            "Job {{ handle: {}, fname: {}, unique: {}, +{} data }}",
+            String::from_utf8_lossy(&self.handle),
+            String::from_utf8_lossy(&self.fname),
+            String::from_utf8_lossy(&self.unique),
+            self.data.len()
+        )
     }
 }

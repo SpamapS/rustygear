@@ -72,9 +72,11 @@ impl Wake for SharedWorkers {
         let mut workers = self.lock().unwrap();
         for fname in worker.iter() {
             let mut add = false;
-            debug!("Looking for {:?} in workers.allworkers, {:?}",
-                   &fname,
-                   &workers.allworkers);
+            debug!(
+                "Looking for {:?} in workers.allworkers, {:?}",
+                &fname,
+                &workers.allworkers
+            );
             match workers.allworkers.get_mut(&fname) {
                 None => {
                     debug!("Did not find {:?}", &fname);
@@ -130,9 +132,11 @@ impl Wake for SharedWorkers {
             workerset.inactive.remove(&conn_id);
             workerset.active.remove(&conn_id);
         }
-        trace!("Shutdown complete for {}. Left: {:?}",
-               conn_id,
-               workers.allworkers);
+        trace!(
+            "Shutdown complete for {}. Left: {:?}",
+            conn_id,
+            workers.allworkers
+        );
     }
 }
 
@@ -182,10 +186,12 @@ impl Worker {
                 match Arc::weak_count(j) {
                     0 => {}
                     a @ _ => {
-                        warn!("Unassigning queued {:?} ({}+{} refs)",
-                              j,
-                              Arc::strong_count(j),
-                              a);
+                        warn!(
+                            "Unassigning queued {:?} ({}+{} refs)",
+                            j,
+                            Arc::strong_count(j),
+                            a
+                        );
                     }
                 }
             }

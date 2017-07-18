@@ -38,16 +38,18 @@ impl fmt::Debug for Packet {
             _p @ ADMIN_RESPONSE => "ADMIN_RESPONSE",
             _ => &unimpl,
         };
-        write!(f,
-               "Packet {{ magic: {:?}, ptype: {}, size: {} }}",
-               match self.magic {
-                   PacketMagic::REQ => "REQ",
-                   PacketMagic::RES => "RES",
-                   PacketMagic::TEXT => "TEXT",
-                   _ => "UNKNOWN",
-               },
-               ptype_str,
-               self.psize)
+        write!(
+            f,
+            "Packet {{ magic: {:?}, ptype: {}, size: {} }}",
+            match self.magic {
+                PacketMagic::REQ => "REQ",
+                PacketMagic::RES => "RES",
+                PacketMagic::TEXT => "TEXT",
+                _ => "UNKNOWN",
+            },
+            ptype_str,
+            self.psize
+        )
     }
 }
 
