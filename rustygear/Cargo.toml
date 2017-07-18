@@ -4,13 +4,9 @@ version = "0.5.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
-time = "0.1"
 bytes = "*"
 hash_ring = "*"
 log = "*"
 env_logger = "*"
-mio = "0.6"
-tokio-core = "*"
 tokio-io = "*"
-tokio-service = "*"
 futures = "*"

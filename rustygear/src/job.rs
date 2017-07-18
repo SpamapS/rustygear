@@ -20,12 +20,6 @@ impl Job {
     }
 }
 
-impl Drop for Job {
-    fn drop(&mut self) {
-        trace!("Dropping {:?}", self);
-    }
-}
-
 impl fmt::Debug for Job {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
