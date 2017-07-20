@@ -9,5 +9,6 @@ hash_ring = "*"
 log = "*"
 env_logger = "*"
 tokio-io = "*"
+tokio-core = "*"
 futures = "*"
 uuid = { version = "*", features = ["v4"] }
