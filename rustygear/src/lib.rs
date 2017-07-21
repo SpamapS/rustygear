@@ -5,6 +5,7 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate futures;
 extern crate uuid;
+extern crate hash_ring;
 pub mod constants;
 pub mod job;
 pub mod codec;

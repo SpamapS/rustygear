@@ -5,7 +5,7 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
 bytes = "*"
-hash_ring = "*"
+hash_ring = { git = "https://github.com/SpamapS/rust-hash-ring.git" }
 log = "*"
 env_logger = "*"
 tokio-io = "*"

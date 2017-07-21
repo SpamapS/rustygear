@@ -157,6 +157,15 @@ impl Packet {
             data: body,
         }
     }
+
+    pub fn new_req(ptype: u32, body: Bytes) -> Packet {
+        Packet {
+            magic: PacketMagic::REQ,
+            ptype: ptype,
+            psize: body.len() as u32,
+            data: body,
+        }
+    }
 }
 
 impl Decoder for PacketCodec {

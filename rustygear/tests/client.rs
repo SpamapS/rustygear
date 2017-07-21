@@ -23,7 +23,9 @@ fn test_client_basic() {
     c.add_server(format!("[::]:{}", listener.local_addr().unwrap().port()));
     let mut conns = c.connect(handle);
     let c = reactor.run(conns).unwrap();
-    assert_eq!(1, c.sockets().len());
+    let sockets = c.sockets();
+    let sockets = sockets.lock().unwrap();
+    assert_eq!(1, sockets.len());
     assert_eq!(0, c.errors().len());
     let mut c2 = Client::new(Some(Bytes::from("client_id_numba_two")));
     c2.add_server(format!("[::]:{}", listener.local_addr().unwrap().port()));
@@ -32,6 +34,8 @@ fn test_client_basic() {
     let handle = reactor.handle();
     let conns = c2.connect(handle);
     let c2 = reactor.run(conns).unwrap();
-    assert_eq!(0, c2.sockets().len());
+    let sockets = c2.sockets();
+    let sockets = sockets.lock().unwrap();
+    assert_eq!(0, sockets.len());
     assert_eq!(1, c2.errors().len());
 }
