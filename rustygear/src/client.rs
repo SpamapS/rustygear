@@ -22,7 +22,7 @@ use bytes::{Bytes, BytesMut, BufMut};
 use tokio_core::reactor::Handle;
 use tokio_core::net::TcpStream;
 use tokio_io::AsyncRead;
-use futures::{BoxFuture, Future, Poll, Async, Sink, Stream};
+use futures::{BoxFuture, Future, Sink, Stream};
 use futures::future;
 use futures::sync::mpsc;
 use futures::sync::oneshot;
@@ -39,7 +39,7 @@ pub struct ClientJob {
     fname: Bytes,
     unique: Bytes,
     data: Bytes,
-    handle: Option<Bytes>,
+    handle: Option<Arc<Bytes>>,
 }
 
 
@@ -55,6 +55,14 @@ impl ClientJob {
             data: data,
             handle: None,
         }
+    }
+
+    pub fn set_handle(&mut self, handle: Arc<Bytes>) {
+        self.handle = Some(handle);
+    }
+
+    pub fn handle(&self) -> Option<Arc<Bytes>> {
+        self.handle.clone()
     }
 }
 

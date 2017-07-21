@@ -10,5 +10,6 @@ log = "*"
 env_logger = "*"
 tokio-io = "*"
 tokio-core = "*"
+tokio-service = "*"
 futures = "*"
 uuid = { version = "*", features = ["v4"] }
