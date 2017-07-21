@@ -12,9 +12,9 @@ use tokio_service::Service;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
-use rustygear::codec::{Packet, PacketMagic};
-use rustygear::constants::*;
-use rustygear::job::Job;
+use codec::{Packet, PacketMagic};
+use constants::*;
+use job::Job;
 
 use admin;
 use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};

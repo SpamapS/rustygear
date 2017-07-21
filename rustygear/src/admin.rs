@@ -1,6 +1,6 @@
 use bytes::BytesMut;
 
-use rustygear::codec::Packet;
+use codec::Packet;
 
 use queues::SharedJobStorage;
 use worker::{SharedWorkers, Wake};

@@ -1,7 +1,6 @@
 extern crate bytes;
 extern crate futures;
 extern crate rustygear;
-extern crate rustygeard;
 
 use std::sync::Arc;
 
@@ -9,10 +8,9 @@ use bytes::Bytes;
 
 use rustygear::constants::*;
 use rustygear::job::Job;
-
-use rustygeard::admin::admin_command_status;
-use rustygeard::queues::{HandleJobStorage, SharedJobStorage};
-use rustygeard::worker::{Worker, SharedWorkers, Wake};
+use rustygear::admin::admin_command_status;
+use rustygear::queues::{HandleJobStorage, SharedJobStorage};
+use rustygear::worker::{Worker, SharedWorkers, Wake};
 
 #[test]
 fn admin_command_status_1job() {

@@ -13,3 +13,4 @@ tokio-core = "*"
 tokio-service = "*"
 futures = "*"
 uuid = { version = "*", features = ["v4"] }
+wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }

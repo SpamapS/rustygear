@@ -14,7 +14,7 @@ use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
 
-use rustygear::codec::{PacketCodec, Packet};
+use codec::{PacketCodec, Packet};
 
 use queues::{HandleJobStorage, SharedJobStorage};
 use worker::{SharedWorkers, Wake};

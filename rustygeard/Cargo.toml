@@ -4,12 +4,6 @@ version = "0.1.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
-bytes = "*"
 rustygear = { path = "../rustygear" }
 log = "*"
 env_logger = "*"
-tokio-core = "*"
-tokio-io = "*"
-tokio-service = "*"
-futures = "*"
-wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }

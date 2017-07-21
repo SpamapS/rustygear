@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use bytes::Bytes;
 
-use rustygear::job::Job;
+use job::Job;
 
 use worker::Worker;
 
