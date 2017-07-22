@@ -1,3 +1,4 @@
+use std::io;
 use std::io::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -9,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::{Async, Future, Sink, Stream, Poll};
 use futures::{future, AsyncSink, StartSend};
 use futures::sync::mpsc::channel;
+use futures::sync::oneshot;
 use tokio_io::AsyncRead;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
@@ -54,6 +56,11 @@ impl Future for MySinkSend {
 
 impl GearmanServer {
     pub fn run(addr: SocketAddr) {
+        let (_stop_tx, stop_rx) = oneshot::channel();
+        Self::run_with_stop(addr, stop_rx);
+    }
+
+    pub fn run_with_stop(addr: SocketAddr, stop_rx: oneshot::Receiver<()>) {
         let curr_conn_id = Arc::new(AtomicUsize::new(0));
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
@@ -104,6 +111,20 @@ impl GearmanServer {
             handle.spawn(writer);
             Ok(())
         });
-        core.run(server).unwrap();
+        let stopper = stop_rx.map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "Graceful Shutdown")
+        });
+        core.run(server.select(stopper).then(|result| {
+            match result {
+                Ok(((), _stopper)) => {
+                    panic!("Listener ended!");
+                    Ok(())
+                }
+                Err((e, _)) => {
+                    error!("Listener error: {}", e);
+                    Err(e)
+                }
+            }
+        })).unwrap();
     }
 }
