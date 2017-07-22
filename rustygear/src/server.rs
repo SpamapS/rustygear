@@ -12,7 +12,7 @@ use futures::{future, AsyncSink, StartSend};
 use futures::sync::mpsc::channel;
 use futures::sync::oneshot;
 use tokio_io::AsyncRead;
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 use tokio_core::net::TcpListener;
 use tokio_service::Service;
 
@@ -23,7 +23,9 @@ use worker::{SharedWorkers, Wake};
 use service::GearmanService;
 
 
-pub struct GearmanServer;
+pub struct GearmanServer {
+    listener: TcpListener,
+}
 
 const MAX_UNHANDLED_OUT_FRAMES: usize = 1024;
 
@@ -55,22 +57,33 @@ impl Future for MySinkSend {
 
 
 impl GearmanServer {
-    pub fn run(addr: SocketAddr) {
-        let (_stop_tx, stop_rx) = oneshot::channel();
-        Self::run_with_stop(addr, stop_rx);
+    pub fn new(addr: SocketAddr, handle: &Handle) -> GearmanServer {
+        GearmanServer {
+            listener: TcpListener::bind(&addr, handle).unwrap(),
+        }
     }
 
-    pub fn run_with_stop(addr: SocketAddr, stop_rx: oneshot::Receiver<()>) {
+    pub fn listener(&self) -> &TcpListener {
+        &self.listener
+    }
+
+    pub fn run(addr: SocketAddr) {
+        let mut core = Core::new().unwrap();
+        let (_stop_tx, stop_rx) = oneshot::channel();
+        let server = Self::new(addr, &core.handle());
+        server.run_with_stop(stop_rx, &mut core);
+    }
+
+    pub fn run_with_stop(self, stop_rx: oneshot::Receiver<()>, core: &mut Core) {
         let curr_conn_id = Arc::new(AtomicUsize::new(0));
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
-        let mut core = Core::new().unwrap();
         let handle = core.handle();
         let remote = core.remote();
-        let listener = TcpListener::bind(&addr, &handle).unwrap();
+        let listener = self.listener;
         let server = listener.incoming().for_each(move |(sock, _)| {
             let conn_id = curr_conn_id.clone().fetch_add(1, Ordering::Relaxed);
             let (sink, stream) = sock.framed(PacketCodec).split();
@@ -117,7 +130,7 @@ impl GearmanServer {
         core.run(server.select(stopper).then(|result| {
             match result {
                 Ok(((), _stopper)) => {
-                    panic!("Listener ended!");
+                    info!("Listener ended!");
                     Ok(())
                 }
                 Err((e, _)) => {
