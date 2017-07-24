@@ -42,7 +42,6 @@ pub struct ClientJob {
     handle: Option<Arc<Bytes>>,
 }
 
-
 impl ClientJob {
     pub fn new(fname: Bytes, data: Bytes, unique: Option<Bytes>) -> ClientJob {
         let unique = match unique {
@@ -147,12 +146,14 @@ impl Client {
     /// with handle filled in
     pub fn submit_job(&mut self, job: &ClientJob) -> BoxFuture<ClientJob, io::Error> {
         let return_sockets = self.sockets.clone();
-        let mut sockets = self.sockets.lock().unwrap();
-        if sockets.len() < 1 {
-            return future::err(io::Error::new(
-                io::ErrorKind::Other,
-                "No sockets to send on",
-            )).boxed();
+        {
+            let sockets = self.sockets.lock().unwrap();
+            if sockets.len() < 1 {
+                return future::err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No sockets to send on",
+                )).boxed();
+            }
         }
         // Header + nulls + fields
         let mut body = BytesMut::with_capacity(
@@ -168,9 +169,12 @@ impl Client {
         let packet = Packet::new_req(SUBMIT_JOB, body);
         let server: Bytes = self.get_server(&job.unique).clone();
         // Temporarily give it to the future
-        let socket = sockets.remove::<Bytes>(&server).expect(
-            "Cannot send concurrently to same server",
-        );
+        let socket = {
+            let mut sockets = self.sockets.lock().unwrap();
+            sockets.remove::<Bytes>(&server).expect(
+                "Cannot send concurrently to same server",
+            )
+        };
         let socket = socket.framed(PacketCodec);
         let (tx, rx) = oneshot::channel::<ClientJob>();
         socket

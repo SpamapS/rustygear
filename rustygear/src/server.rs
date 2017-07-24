@@ -58,9 +58,7 @@ impl Future for MySinkSend {
 
 impl GearmanServer {
     pub fn new(addr: SocketAddr, handle: &Handle) -> GearmanServer {
-        GearmanServer {
-            listener: TcpListener::bind(&addr, handle).unwrap(),
-        }
+        GearmanServer { listener: TcpListener::bind(&addr, handle).unwrap() }
     }
 
     pub fn listener(&self) -> &TcpListener {
@@ -127,16 +125,14 @@ impl GearmanServer {
         let stopper = stop_rx.map_err(|_| {
             io::Error::new(io::ErrorKind::Other, "Graceful Shutdown")
         });
-        core.run(server.select(stopper).then(|result| {
-            match result {
-                Ok(((), _stopper)) => {
+        core.run(server.select(stopper).then(|result| match result {
+            Ok(((), _stopper)) => {
                     info!("Listener ended!");
                     Ok(())
                 }
-                Err((e, _)) => {
-                    error!("Listener error: {}", e);
-                    Err(e)
-                }
+            Err((e, _)) => {
+                error!("Listener error: {}", e);
+                Err(e)
             }
         })).unwrap();
     }

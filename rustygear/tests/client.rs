@@ -11,7 +11,7 @@ use futures::Future;
 use futures::sync::oneshot;
 use tokio_core::reactor::Core;
 
-use rustygear::client::{Client, AddServer};
+use rustygear::client::{Client, ClientJob, AddServer};
 use rustygear::server::GearmanServer;
 
 #[test]
@@ -25,17 +25,24 @@ fn test_client_basic() {
         let mut core = Core::new().unwrap();
         let addr = "[::]:0".parse().unwrap();
         let server = GearmanServer::new(addr, &core.handle());
-        port_tx.send(server.listener().local_addr().unwrap().port()).unwrap();
+        port_tx
+            .send(server.listener().local_addr().unwrap().port())
+            .unwrap();
         server.run_with_stop(stop_rx, &mut core);
     });
     let server_port = port_rx.recv().unwrap();
     c.add_server(format!("[::]:{}", server_port));
     let conns = c.connect(handle);
-    let c = reactor.run(conns).unwrap();
+    let mut c = reactor.run(conns).unwrap();
     let sockets = c.sockets();
-    let sockets = sockets.lock().unwrap();
-    assert_eq!(1, sockets.len());
-    assert_eq!(0, c.errors().len());
+    {
+        let sockets = sockets.lock().unwrap();
+        assert_eq!(1, sockets.len());
+        assert_eq!(0, c.errors().len());
+    }
+    // Now submit a job
+    let job = ClientJob::new(Bytes::from("foo"), Bytes::from("payload"), None);
+    let job = reactor.run(c.submit_job(&job));
     let mut c2 = Client::new(Some(Bytes::from("client_id_numba_two")));
     c2.add_server(format!("[::]:{}", server_port));
     // Possible race in 3..2.. Something may be assigned the listener port
