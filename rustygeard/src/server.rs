@@ -82,15 +82,15 @@ impl GearmanServer {
                 remote.clone(),
             );
             // Read stuff, write if needed
-            let reader = stream
+            let reader = Box::new(
+                stream
                 .for_each(move |frame| {
                     let tx = tx.clone();
                     service.call(frame).and_then(move |response| {
                         tx.send(response).then(|_| future::ok(()))
                     })
                 })
-                .map_err(|_| {})
-                .boxed();
+                .map_err(|_| {}));
             let sink_cell = Rc::new(RefCell::new(sink));
             let writer = rx.for_each(move |to_send| {
                 trace!("Sending {:?}", &to_send);

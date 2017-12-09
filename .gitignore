@@ -13,6 +13,9 @@
 /rustygear/Cargo.lock
 /rustygeard/Cargo.lock
 
+# rustfmt trash
+*.rustfmt
+
 # Editor files
 *.swp
 ~*
