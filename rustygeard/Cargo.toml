@@ -7,7 +7,7 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 bytes = "*"
 rustygear = { path = "../rustygear" }
 log = "*"
-env_logger = "*"
+env_logger = ">=0.6.0"
 tokio-core = "*"
 tokio-io = "*"
 tokio-service = "*"

@@ -130,7 +130,7 @@ impl GearmanService {
         GearmanService {
             conn_id: conn_id,
             queues: queues,
-            worker: Arc::new(Mutex::new((Worker::new()))),
+            worker: Arc::new(Mutex::new(Worker::new())),
             workers: workers,
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,

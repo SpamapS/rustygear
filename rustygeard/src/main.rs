@@ -10,7 +10,7 @@ extern crate tokio_core;
 use rustygeard::server::GearmanServer;
 
 fn main() {
-    env_logger::init().unwrap();
+    env_logger::init();
 
     info!("Binding to 0.0.0.0:4730");
     let address = "0.0.0.0:4730".parse().unwrap();
