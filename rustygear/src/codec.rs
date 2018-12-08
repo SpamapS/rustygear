@@ -3,7 +3,7 @@ use std::io;
 use std::str;
 
 use bytes::{Bytes, BytesMut};
-use bytes::{IntoBuf, Buf, BufMut, BigEndian};
+use bytes::{IntoBuf, Buf, BufMut};
 use tokio_io::codec::{Encoder, Decoder};
 
 use constants::*;
@@ -116,10 +116,10 @@ impl Packet {
         trace!("Buf is >= 12 bytes ({})", buf.len());
         //buf.split_to(4);
         // Now get the type
-        let ptype = Bytes::from(&buf[4..8]).into_buf().get_u32::<BigEndian>();
+        let ptype = Bytes::from(&buf[4..8]).into_buf().get_u32_be();
         debug!("We got a {}", &PTYPES[ptype as usize].name);
         // Now the length
-        let psize = Bytes::from(&buf[8..12]).into_buf().get_u32::<BigEndian>();
+        let psize = Bytes::from(&buf[8..12]).into_buf().get_u32_be();
         debug!("Data section is {} bytes", psize);
         let packet_len = 12 + psize as usize;
         if buf.len() < packet_len {
@@ -144,8 +144,8 @@ impl Packet {
         };
         let mut buf = BytesMut::with_capacity(12);
         buf.extend(magic.iter());
-        buf.put_u32::<BigEndian>(self.ptype);
-        buf.put_u32::<BigEndian>(self.psize);
+        buf.put_u32_be(self.ptype);
+        buf.put_u32_be(self.psize);
         (buf.freeze(), self.data)
     }
 
