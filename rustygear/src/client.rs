@@ -7,6 +7,7 @@ fn test_basic_client() {
     c.add_server("::1");
     //let response = c.echo("foo");
     //assert_eq!(response, "foo");
+    c.remove_server("::1");
 }
 
 #[derive(PartialEq, Eq)]
@@ -50,5 +51,9 @@ impl Client {
 
     fn add_server<S: Into<String>>(&mut self, hostname: S) {
        self.servers.insert(Server::new(&hostname.into()));
+    }
+
+    fn remove_server<S: Into<String>>(&mut self, hostname: S) {
+       self.servers.remove(&Server::new(&hostname.into()));
     }
 }
