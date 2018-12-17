@@ -2,11 +2,12 @@ use std::fmt;
 use std::io;
 use std::str;
 
+use log::*;
 use bytes::{Bytes, BytesMut};
 use bytes::{IntoBuf, Buf, BufMut};
 use tokio_io::codec::{Encoder, Decoder};
 
-use constants::*;
+use crate::constants::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PacketMagic {

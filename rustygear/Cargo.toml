@@ -2,11 +2,13 @@
 name = "rustygear"
 version = "0.5.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
+edition = "2018"
 
 [dependencies]
 bytes = ">=0.4.7"
 hash_ring = "*"
 log = "*"
 env_logger = "*"
+tokio = "*"
 tokio-io = "*"
 futures = "*"
