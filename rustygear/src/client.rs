@@ -19,7 +19,7 @@ use futures::Future;
 use hash_ring::HashRing;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::{Core, Handle};
-use tokio_io::codec::Framed;
+use tokio_codec::Framed;
 use tokio::io::write_all;
 use bytes::{Bytes, BytesMut};
 
@@ -81,8 +81,6 @@ struct Server {
     host: String,
     port: u16,
     addr: SocketAddr,
-    socket: Arc<Mutex<Option<Arc<FramedGearman>>>>,
-    handle: Handle,
 }
 
 const DEFAULT_PORT: u16 = 4730;
@@ -96,32 +94,14 @@ impl PartialEq for Server {
 impl Eq for Server {}
 
 impl Server {
-    fn new(host: &String, port: u16, addr: SocketAddr, handle: Handle) -> Server {
+    fn new(host: &String, port: u16, addr: SocketAddr) -> Server {
         Server {
             host: host.clone(),
             port: port,
             addr: addr,
-            socket: Arc::new(Mutex::new(None)),
-            handle: handle,
         }
     }
 
-    fn connect(&mut self) -> ResponseFuture<Arc<FramedGearman>, io::Error> {
-        let sock_ptr = self.socket.clone();
-        let sock_now = sock_ptr.lock().unwrap();
-        let sock_ptr2 = self.socket.clone();
-        match *sock_now {
-            None => {
-                Box::new(TcpStream::connect(&self.addr, &self.handle).and_then(move |sock| {
-                    let asock = Arc::new(sock.framed(PacketCodec{}));
-                    let mut sock = sock_ptr2.lock().unwrap();
-                    *sock = Some(asock.clone());
-                    Ok(asock)
-                }))
-            },
-            Some(ref sock) => Box::new(future::ok(sock.clone())),
-        }
-    }
 }
 
 impl fmt::Display for Server {
@@ -133,7 +113,6 @@ impl fmt::Display for Server {
 struct Client {
     server_ring: HashRing<ServerNode>,
     servers: HashMap<ServerNode, Server>,
-    readbuf: Arc<Mutex<BytesMut>>,
     core: Core,
 }
 
@@ -156,7 +135,7 @@ impl Client {
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", &e))),
             Ok(addr) => addr,
         };
-        let serv = Server::new(&host.into(), port, addr, self.core.handle());
+        let serv = Server::new(&host.into(), port, addr);
         let serv_node = ServerNode::new(&serv);
         self.server_ring.add_node(&serv_node);
         self.servers.insert(serv_node, serv);
@@ -170,14 +149,21 @@ impl Client {
             Err(e) => return Err(io::Error::new(io::ErrorKind::Other, format!("{}", &e))),
             Ok(addr) => addr,
         };
-        let serv = Server::new(&host.into(), port, addr, self.core.handle());
+        let serv = Server::new(&host.into(), port, addr);
         let serv_node = ServerNode::new(&serv);
         self.server_ring.remove_node(&serv_node);
         self.servers.remove(&serv_node);
         Ok(())
     }
 
-    fn choose_connection<S: Into<String>>(&mut self, unique: S) -> ResponseFuture<Arc<FramedGearman>, io::Error>
+    fn connect(&mut self, server: &Server) -> ResponseFuture<usize, io::Error> {
+        Box::new(TcpStream::connect(&server.addr, &self.core.handle()).and_then(move |sock| {
+            self.sockets.append(Framed::new(sock, PacketCodec{}));
+            self.sockets.length() - 1
+        }))
+    }
+
+    fn choose_connection<S: Into<String>>(&mut self, unique: S) -> ResponseFuture<usize, io::Error>
     {
         match self.server_ring.get_node(unique.into()) {
             None => Box::new(future::err(io::Error::new(io::ErrorKind::Other, "Server missing from hash ring!"))),
