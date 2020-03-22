@@ -2,9 +2,7 @@ use std::fmt;
 use std::io;
 use std::str;
 
-use bytes::{Bytes, BytesMut};
-use bytes::{IntoBuf, Buf, BufMut};
-use tokio_io::codec::{Encoder, Decoder};
+use bytes::{Bytes, BytesMut, Buf, BufMut};
 
 use constants::*;
 
@@ -38,7 +36,7 @@ impl fmt::Debug for Packet {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let unimpl = format!("__UNIMPLEMENTED__({})", self.ptype);
         let ptype_str = match self.ptype {
-            p @ 0...42 => PTYPES[p as usize].name,
+            p @ 0..=42 => PTYPES[p as usize].name,
             _p @ ADMIN_STATUS => "ADMIN_STATUS",
             _p @ ADMIN_VERSION => "ADMIN_VERSION",
             _p @ ADMIN_UNKNOWN => "ADMIN_UNKNOWN",
@@ -68,7 +66,7 @@ impl Packet {
         let newline = buf[..].iter().position(|b| *b == b'\n');
         if let Some(n) = newline {
             let line = buf.split_to(n);
-            buf.split_to(1); // drop the newline itself
+            let _ = buf.split_to(1); // drop the newline itself
             let data_str = match str::from_utf8(&line[..]) {
                 Ok(s) => s,
                 Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "invalid string")),
@@ -113,20 +111,20 @@ impl Packet {
         if buf.len() < 12 {
             return Ok(None);
         }
-        trace!("Buf is >= 12 bytes ({})", buf.len());
-        //buf.split_to(4);
+        trace!("Buf is >= 12 bytes ({}) -- check header", buf.len());
+        //let header = buf.split_off(12).freeze();
+        let header = &buf.clone()[0..12];
         // Now get the type
-        let ptype = Bytes::from(&buf[4..8]).into_buf().get_u32_be();
+        let ptype = (&header[4..8]).get_u32();
         debug!("We got a {}", &PTYPES[ptype as usize].name);
         // Now the length
-        let psize = Bytes::from(&buf[8..12]).into_buf().get_u32_be();
+        let psize = (&header[8..12]).get_u32();
         debug!("Data section is {} bytes", psize);
         let packet_len = 12 + psize as usize;
         if buf.len() < packet_len {
             return Ok(None);
         }
-        // Discard header bytes now
-        buf.split_to(12);
+        let _ = buf.split_to(12);
         Ok(Some(Packet {
             magic: magic,
             ptype: ptype,
@@ -144,8 +142,8 @@ impl Packet {
         };
         let mut buf = BytesMut::with_capacity(12);
         buf.extend(magic.iter());
-        buf.put_u32_be(self.ptype);
-        buf.put_u32_be(self.psize);
+        buf.put_u32(self.ptype);
+        buf.put_u32(self.psize);
         (buf.freeze(), self.data)
     }
 
@@ -157,23 +155,9 @@ impl Packet {
             data: body,
         }
     }
-}
 
-impl Decoder for PacketCodec {
-    type Item = Packet;
-    type Error = io::Error;
-
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        Packet::decode(buf)
-    }
-}
-
-impl Encoder for PacketCodec {
-    type Item = Packet;
-    type Error = io::Error;
-
-    fn encode(&mut self, msg: Self::Item, buf: &mut BytesMut) -> Result<(), io::Error> {
-        let allbytes = msg.into_bytes();
+    fn encode(self, buf: &mut BytesMut) -> Result<(), io::Error> {
+        let allbytes = self.into_bytes();
         buf.extend(allbytes.0);
         buf.extend(allbytes.1);
         Ok(())
