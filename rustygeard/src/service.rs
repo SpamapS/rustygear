@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 
 use futures::{future, Future, Sink};
-use futures::sync::mpsc::Sender;
+use futures::channel::mpsc::Sender;
 use tokio_core::reactor::Remote;
 use tokio_service::Service;
 
@@ -149,7 +149,7 @@ impl GearmanService {
         }
     }
 
-    fn handle_can_do(&self, packet: &Packet) -> Box<Future<Item = Packet, Error = io::Error>> {
+    fn handle_can_do(&self, packet: &Packet) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
@@ -160,7 +160,7 @@ impl GearmanService {
         Box::new(future::finished(Self::no_response()))
     }
 
-    fn handle_cant_do(&self, packet: &Packet) -> Box<Future<Item = Packet, Error = io::Error>> {
+    fn handle_cant_do(&self, packet: &Packet) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
         let worker = self.worker.clone();
         debug!("CANT_DO fname = {:?}", packet.data);
         let mut worker = worker.lock().unwrap();
@@ -168,7 +168,7 @@ impl GearmanService {
         Box::new(future::finished(Self::no_response()))
     }
 
-    fn handle_grab_job_all(&self) -> Box<Future<Item = Packet, Error = io::Error>> {
+    fn handle_grab_job_all(&self) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -194,7 +194,7 @@ impl GearmanService {
         Box::new(future::finished(new_res(NO_JOB, Bytes::new())))
     }
 
-    fn handle_grab_job_uniq(&self) -> Box<Future<Item = Packet, Error = io::Error>> {
+    fn handle_grab_job_uniq(&self) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();

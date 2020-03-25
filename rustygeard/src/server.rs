@@ -6,9 +6,9 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::{Async, Future, Sink, Stream, Poll};
-use futures::{future, AsyncSink, StartSend};
-use futures::sync::mpsc::channel;
+use futures::{Future, Sink, Stream};
+use futures::future;
+use futures::channel::mpsc::channel;
 use tokio_io::AsyncRead;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
@@ -24,32 +24,6 @@ use service::GearmanService;
 pub struct GearmanServer;
 
 const MAX_UNHANDLED_OUT_FRAMES: usize = 1024;
-
-struct MySinkSend {
-    sink: Rc<RefCell<Sink<SinkItem = Packet, SinkError = Error>>>,
-    item: StartSend<Packet, Error>,
-}
-
-impl Future for MySinkSend {
-    type Item = ();
-    type Error = Error;
-    fn poll(&mut self) -> Poll<(), Error> {
-        let mut sink = self.sink.borrow_mut();
-        trace!("checking item");
-        let to_send = match self.item {
-            Ok(AsyncSink::NotReady(ref to_send)) => to_send.clone(),
-            Ok(AsyncSink::Ready) => return sink.poll_complete(),
-            Err(ref e) => panic!("Sink is broken: {:?}", e),
-        };
-        trace!("calling start_send");
-        self.item = sink.start_send(to_send);
-        match self.item {
-            Ok(AsyncSink::Ready) => sink.poll_complete(),
-            Ok(AsyncSink::NotReady(_)) => Ok(Async::NotReady),
-            Err(ref e) => panic!("Sink is broken: {:?}", e),
-        }
-    }
-}
 
 
 impl GearmanServer {

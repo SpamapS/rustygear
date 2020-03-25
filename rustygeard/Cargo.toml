@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 
 [dependencies]
-bytes = "*"
+bytes = ">=0.5.0"
 rustygear = { path = "../rustygear" }
 log = "*"
 env_logger = ">=0.6.0"
