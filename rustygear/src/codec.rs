@@ -3,6 +3,7 @@ use std::io;
 use std::str;
 
 use bytes::{Bytes, BytesMut, Buf, BufMut};
+use tokio_util::codec::{Decoder, Encoder};
 
 use constants::*;
 
@@ -58,9 +59,6 @@ impl fmt::Debug for Packet {
     }
 }
 
-#[derive(Debug)]
-pub struct PacketCodec;
-
 impl Packet {
     pub fn admin_decode(buf: &mut BytesMut) -> Result<Option<Packet>, io::Error> {
         let newline = buf[..].iter().position(|b| *b == b'\n');
@@ -88,52 +86,7 @@ impl Packet {
         Ok(None) // Wait for more data
     }
 
-    pub fn decode(buf: &mut BytesMut) -> Result<Option<Packet>, io::Error> {
-        debug!("Decoding {:?}", buf);
-        // Peek at first 4
-        // Is this a req/res
-        if buf.len() < 4 {
-            return Ok(None);
-        }
-        let mut magic_buf: [u8; 4] = [0; 4];
-        magic_buf.clone_from_slice(&buf[0..4]);
-        let magic = match magic_buf {
-            REQ => PacketMagic::REQ,
-            RES => PacketMagic::RES,
-            // TEXT/ADMIN protocol
-            _ => PacketMagic::TEXT,
-        };
-        debug!("Magic is {:?}", magic);
-        if magic == PacketMagic::TEXT {
-            debug!("admin protocol detected");
-            return Packet::admin_decode(buf);
-        }
-        if buf.len() < 12 {
-            return Ok(None);
-        }
-        trace!("Buf is >= 12 bytes ({}) -- check header", buf.len());
-        //let header = buf.split_off(12).freeze();
-        let header = &buf.clone()[0..12];
-        // Now get the type
-        let ptype = (&header[4..8]).get_u32();
-        debug!("We got a {}", &PTYPES[ptype as usize].name);
-        // Now the length
-        let psize = (&header[8..12]).get_u32();
-        debug!("Data section is {} bytes", psize);
-        let packet_len = 12 + psize as usize;
-        if buf.len() < packet_len {
-            return Ok(None);
-        }
-        let _ = buf.split_to(12);
-        Ok(Some(Packet {
-            magic: magic,
-            ptype: ptype,
-            psize: psize,
-            data: buf.split_to(psize as usize).freeze(),
-        }))
-    }
-
-    pub fn into_bytes(self) -> (Bytes, Bytes) {
+    fn into_bytes(self) -> (Bytes, Bytes) {
         let magic = match self.magic {
             PacketMagic::UNKNOWN => panic!("Unknown packet magic cannot be sent"),
             PacketMagic::REQ => REQ,
@@ -155,11 +108,66 @@ impl Packet {
             data: body,
         }
     }
+}
 
-    fn encode(self, buf: &mut BytesMut) -> Result<(), io::Error> {
-        let allbytes = self.into_bytes();
-        buf.extend(allbytes.0);
-        buf.extend(allbytes.1);
+pub struct PacketCodec;
+
+
+impl Decoder for PacketCodec {
+    type Item = Packet;
+    type Error = io::Error;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        debug!("Decoding {:?}", src);
+        // Peek at first 4
+        // Is this a req/res
+        if src.len() < 4 {
+            return Ok(None);
+        }
+        let mut magic_buf: [u8; 4] = [0; 4];
+        magic_buf.clone_from_slice(&src[0..4]);
+        let magic = match magic_buf {
+            REQ => PacketMagic::REQ,
+            RES => PacketMagic::RES,
+            // TEXT/ADMIN protocol
+            _ => PacketMagic::TEXT,
+        };
+        debug!("Magic is {:?}", magic);
+        if magic == PacketMagic::TEXT {
+            debug!("admin protocol detected");
+            return Packet::admin_decode(src);
+        }
+        if src.len() < 12 {
+            return Ok(None);
+        }
+        trace!("Buf is >= 12 bytes ({}) -- check header", src.len());
+        let header = &src.clone()[0..12];
+        // Now get the type
+        let ptype = (&header[4..8]).get_u32();
+        debug!("We got a {}", &PTYPES[ptype as usize].name);
+        // Now the length
+        let psize = (&header[8..12]).get_u32();
+        debug!("Data section is {} bytes", psize);
+        let packet_len = 12 + psize as usize;
+        if src.len() < packet_len {
+            return Ok(None);
+        }
+        let _ = src.split_to(12);
+        Ok(Some(Packet {
+            magic: magic,
+            ptype: ptype,
+            psize: psize,
+            data: src.split_to(psize as usize).freeze(),
+        }))
+    }
+}
+
+impl Encoder<Packet> for PacketCodec {
+    type Error = io::Error;
+    fn encode(&mut self, item: Packet, dst: &mut BytesMut) -> Result<(), io::Error> {
+        let allbytes = item.into_bytes();
+        dst.extend(allbytes.0);
+        dst.extend(allbytes.1);
         Ok(())
     }
 }
