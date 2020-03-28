@@ -33,11 +33,11 @@ pub type SharedWorkers = Arc<Mutex<Workers>>;
 
 pub trait Wake {
     fn new_workers() -> Self;
-    fn queue_wake(&mut self, &Bytes) -> Vec<usize>;
+    fn queue_wake(&mut self, fname: &Bytes) -> Vec<usize>;
     fn wakeworkers_drain(&mut self) -> Vec<usize>;
-    fn sleep(&mut self, &mut Worker, usize);
-    fn wakeup(&mut self, &mut Worker, usize);
-    fn count_workers(&mut self, &Bytes) -> (usize, usize);
+    fn sleep(&mut self, worker: &mut Worker, remote: usize);
+    fn wakeup(&mut self, worker: &mut Worker, remote: usize);
+    fn count_workers(&mut self, fname: &Bytes) -> (usize, usize);
     fn shutdown(&mut self, conn_id: usize);
 }
 

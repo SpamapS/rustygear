@@ -1,4 +1,3 @@
-use std::io::Error;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -6,19 +5,19 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use futures::{Future, Sink, Stream};
+use futures::Sink;
 use futures::future;
 use futures::channel::mpsc::channel;
 use tokio_io::AsyncRead;
 use tokio_core::reactor::Core;
 use tokio_core::net::TcpListener;
-use tokio_service::Service;
+use tower_service::Service;
 
 use rustygear::codec::{PacketCodec, Packet};
 
-use queues::{HandleJobStorage, SharedJobStorage};
-use worker::{SharedWorkers, Wake};
-use service::GearmanService;
+use crate::queues::{HandleJobStorage, SharedJobStorage};
+use crate::worker::{SharedWorkers, Wake};
+use crate::service::GearmanService;
 
 
 pub struct GearmanServer;

@@ -5,10 +5,11 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 
-use futures::{future, Future, Sink};
+use futures::{future, Future, FutureExt};
 use futures::channel::mpsc::Sender;
+use futures::sink::SinkExt;
 use tokio_core::reactor::Remote;
-use tokio_service::Service;
+use tower_service::Service;
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -16,9 +17,9 @@ use rustygear::codec::{Packet, PacketMagic};
 use rustygear::constants::*;
 use rustygear::job::Job;
 
-use admin;
-use queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
-use worker::{SharedWorkers, Worker, Wake};
+use crate::admin;
+use crate::queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
+use crate::worker::{SharedWorkers, Worker, Wake};
 
 pub fn new_res(ptype: u32, data: Bytes) -> Packet {
     Packet {
@@ -149,7 +150,7 @@ impl GearmanService {
         }
     }
 
-    async fn handle_can_do(&self, packet: &Packet) -> Result<Packet> {
+    async fn handle_can_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
@@ -160,7 +161,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    async fn handle_cant_do(&self, packet: &Packet) -> Result<Packet> {
+    async fn handle_cant_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         debug!("CANT_DO fname = {:?}", packet.data);
         let mut worker = worker.lock().unwrap();
@@ -168,7 +169,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    fn handle_grab_job_all(&self) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
+    async fn handle_grab_job_all(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -187,14 +188,14 @@ impl GearmanService {
                 // reducer not implemented
                 data.put_u8(b'\0');
                 data.extend(&j.data);
-                return Box::new(future::finished(new_res(JOB_ASSIGN_ALL, data.freeze())));
+                return Ok(new_res(JOB_ASSIGN_ALL, data.freeze()));
             }
             None => {}
         };
-        Box::new(future::finished(new_res(NO_JOB, Bytes::new())))
+        Ok(new_res(NO_JOB, Bytes::new()))
     }
 
-    fn handle_grab_job_uniq(&self) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
+    async fn handle_grab_job_uniq(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -211,14 +212,13 @@ impl GearmanService {
                 data.extend(&j.unique);
                 data.put_u8(b'\0');
                 data.extend(&j.data);
-                return Box::new(future::finished(new_res(JOB_ASSIGN_UNIQ, data.freeze())));
+                Ok(new_res(JOB_ASSIGN_UNIQ, data.freeze()))
             }
-            None => {}
-        };
-        Box::new(future::finished(new_res(NO_JOB, Bytes::new())))
+            None => Ok(new_res(NO_JOB, Bytes::new()))
+        }
     }
 
-    fn handle_grab_job(&self) -> Box<Future<Item = Packet, Error = io::Error>> {
+    async fn handle_grab_job(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -232,26 +232,26 @@ impl GearmanService {
                 data.extend(&j.fname);
                 data.put_u8(b'\0');
                 data.extend(&j.data);
-                return Box::new(future::finished(new_res(JOB_ASSIGN, data.freeze())));
+                return Ok(new_res(JOB_ASSIGN, data.freeze()));
             }
             None => {}
         };
-        Box::new(future::finished(new_res(NO_JOB, Bytes::new())))
+        Ok(new_res(NO_JOB, Bytes::new()))
     }
 
-    fn handle_pre_sleep(&self) -> Box<Future<Item = Packet, Error = io::Error>> {
+    async fn handle_pre_sleep(&self) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 
-    fn handle_submit_job(
+    async fn handle_submit_job(
         &self,
         priority: JobQueuePriority,
         wait: bool,
         packet: Packet,
-    ) -> Box<Future<Item = Packet, Error = io::Error>> {
+    ) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let conn_id = match wait {
             true => Some(self.conn_id),
@@ -279,16 +279,14 @@ impl GearmanService {
                             }
                             Some(tx) => {
                                 let tx = tx.clone();
+                                /* XXX wtf
                                 remote.spawn(move |handle| {
-                                    handle.spawn(tx.send(new_noop()).then(|res| {
-                                        match res {
-                                            Ok(_) => {}
-                                            Err(e) => error!("Send Error! {:?}", e),
-                                        }
-                                        Ok(())
-                                    }));
+                                    if let Err(e) = handle.spawn(tx.send(new_noop())) {
+                                        error!("Send Error! {:?}", e);
+                                    };
                                     Ok(())
                                 });
+                                */
                             }
                         }
                     }
@@ -321,18 +319,18 @@ impl GearmanService {
             let waiters = job_waiters.entry(handle.clone()).or_insert(Vec::new());
             waiters.push(self.conn_id);
         }
-        Box::new(future::finished(Packet {
+        Ok(Packet {
             magic: PacketMagic::RES,
             ptype: JOB_CREATED,
             psize: psize,
             data: handle,
-        }))
+        })
     }
 
-    fn handle_work_complete(
+    async fn handle_work_complete(
         &self,
         packet: &Packet,
-    ) -> Box<Future<Item = Packet, Error = io::Error>> {
+    ) -> Result<Packet, io::Error> {
         // Search for handle
         let mut fields = packet.data.clone();
         let handle = next_field(&mut fields).unwrap();
@@ -357,10 +355,10 @@ impl GearmanService {
                 self.send_to_conn_id(*conn_id, packet.clone());
             }
         }
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 
-    fn handle_work_update(&self, packet: &Packet) -> Box<Future<Item = Packet, Error = io::Error>> {
+    async fn handle_work_update(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let mut fields = packet.data.clone();
         let handle = next_field(&mut fields).unwrap();
         let job_waiters = self.job_waiters.lock().unwrap();
@@ -369,27 +367,26 @@ impl GearmanService {
                 self.send_to_conn_id(*conn_id, packet.clone());
             }
         }
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 
-    fn handle_set_client_id(
+    async fn handle_set_client_id(
         &self,
         packet: &Packet,
-    ) -> Box<Future<Item = Packet, Error = io::Error>> {
+    ) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
         let mut client_id = self.client_id.borrow_mut();
         *client_id = d;
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 }
 
-impl Service for GearmanService {
-    type Request = Packet;
+impl Service<Packet> for GearmanService {
     type Response = Packet;
     type Error = io::Error;
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
+    type Future = Box<dyn Future<Output = Result<Self::Response, Self::Error>>>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&self, req: Packet) -> Self::Future {
         debug!("[{:?}] Got a req {:?}", self.client_id.borrow(), req);
         match req.ptype {
             ADMIN_VERSION | ADMIN_STATUS => Box::new(future::ok(self.response_from_packet(&req))),
@@ -408,7 +405,7 @@ impl Service for GearmanService {
             WORK_COMPLETE => self.handle_work_complete(&req),
             WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
             SET_CLIENT_ID => self.handle_set_client_id(&req),
-            ECHO_REQ => Box::new(future::finished(new_res(ECHO_RES, req.data))),
+            ECHO_REQ => Ok(new_res(ECHO_RES, req.data)),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
                 Box::new(future::err(io::Error::new(

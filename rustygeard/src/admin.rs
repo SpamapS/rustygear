@@ -2,8 +2,8 @@ use bytes::BytesMut;
 
 use rustygear::codec::Packet;
 
-use queues::SharedJobStorage;
-use worker::{SharedWorkers, Wake};
+use crate::queues::SharedJobStorage;
+use crate::worker::{SharedWorkers, Wake};
 
 pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
     let mut response = BytesMut::with_capacity(1024 * 1024); // XXX Wild guess.

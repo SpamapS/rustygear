@@ -11,6 +11,6 @@ log = "*"
 env_logger = ">=0.6.0"
 tokio-core = "*"
 tokio-io = "*"
-tokio-service = "*"
+tower-service = "*"
 futures = "*"
 wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }

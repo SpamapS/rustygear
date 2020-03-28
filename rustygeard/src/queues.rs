@@ -5,7 +5,7 @@ use bytes::Bytes;
 
 use rustygear::job::Job;
 
-use worker::Worker;
+use crate::worker::Worker;
 
 pub type JobQueue = VecDeque<Weak<Job>>;
 pub type JobQueues = HashMap<Bytes, [JobQueue; 3]>;
