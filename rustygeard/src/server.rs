@@ -68,11 +68,7 @@ impl GearmanServer {
             let sink_cell = Rc::new(RefCell::new(sink));
             let writer = rx.for_each(move |to_send| {
                 trace!("Sending {:?}", &to_send);
-                let sender = MySinkSend {
-                    sink: sink_cell.clone(),
-                    item: sink_cell.borrow_mut().start_send(to_send),
-                };
-                sender.map_err(|_| ())
+                sink.start_send(to_send)
             });
             handle.spawn(reader);
             handle.spawn(writer);

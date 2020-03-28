@@ -149,7 +149,7 @@ impl GearmanService {
         }
     }
 
-    fn handle_can_do(&self, packet: &Packet) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
+    async fn handle_can_do(&self, packet: &Packet) -> Result<Packet> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
@@ -157,15 +157,15 @@ impl GearmanService {
         let mut worker = worker.lock().unwrap();
         worker.can_do(packet.data.clone());
         workers.clone().wakeup(&mut worker, conn_id);
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 
-    fn handle_cant_do(&self, packet: &Packet) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
+    async fn handle_cant_do(&self, packet: &Packet) -> Result<Packet> {
         let worker = self.worker.clone();
         debug!("CANT_DO fname = {:?}", packet.data);
         let mut worker = worker.lock().unwrap();
         worker.cant_do(&packet.data);
-        Box::new(future::finished(Self::no_response()))
+        Ok(Self::no_response())
     }
 
     fn handle_grab_job_all(&self) -> Box<dyn Future<Item = Packet, Error = io::Error>> {
