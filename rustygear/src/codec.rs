@@ -5,7 +5,7 @@ use std::str;
 use bytes::{Bytes, BytesMut, Buf, BufMut};
 use tokio_util::codec::{Decoder, Encoder};
 
-use constants::*;
+use crate::constants::*;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PacketMagic {

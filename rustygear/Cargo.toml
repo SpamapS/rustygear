@@ -2,6 +2,7 @@
 name = "rustygear"
 version = "0.6.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
+edition = "2018"
 
 [dependencies.tokio-util]
 features = ["codec"]
