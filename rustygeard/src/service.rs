@@ -377,7 +377,7 @@ impl GearmanService {
         packet: &Packet,
     ) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
-        let mut client_id = self.client_id.lock();
+        let mut client_id = self.client_id.lock().unwrap();
         *client_id = d;
         Ok(Self::no_response())
     }

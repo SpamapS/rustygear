@@ -60,7 +60,7 @@ impl GearmanServer {
                                 let tx = tx.clone();
                                 if let Ok(response) = service.call(frame.unwrap()).await {
                                     tx.send(response).await;
-                                }
+                                };
                             }
                         };
                         
