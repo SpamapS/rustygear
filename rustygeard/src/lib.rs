@@ -1,10 +1,4 @@
-#[macro_use]
-extern crate log;
-extern crate bytes;
-extern crate futures;
-extern crate tokio_io;
-extern crate tokio_core;
-extern crate rustygear;
+#[macro_use] extern crate log;
 pub mod admin;
 pub mod server;
 pub mod worker;

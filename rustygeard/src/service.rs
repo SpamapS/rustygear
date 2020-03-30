@@ -4,11 +4,14 @@ use std::ops::Drop;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
+use std::pin::Pin;
+
+use core::task::{Context, Poll};
 
 use futures::{future, Future, FutureExt};
 use futures::channel::mpsc::Sender;
 use futures::sink::SinkExt;
-use tokio_core::reactor::Remote;
+//use tokio_core::reactor::Remote;
 use tower_service::Service;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -45,7 +48,7 @@ pub struct GearmanService {
     pub job_count: Arc<AtomicUsize>,
     senders_by_conn_id: SendersByConnId,
     job_waiters: JobWaiters,
-    remote: Remote,
+    //remote: Remote,
     client_id: RefCell<Bytes>,
 }
 
@@ -77,7 +80,7 @@ impl GearmanService {
     fn response_from_packet(&self, packet: &Packet) -> Packet {
         match packet.ptype {
             ADMIN_VERSION => {
-                let resp_str = "OK some-rustygear-version\n";
+                let resp_str = b"OK some-rustygear-version\n";
                 let mut resp_body = BytesMut::with_capacity(resp_str.len());
                 resp_body.put(&resp_str[..]);
                 Packet {
@@ -126,7 +129,7 @@ impl GearmanService {
         job_count: Arc<AtomicUsize>,
         senders_by_conn_id: SendersByConnId,
         job_waiters: JobWaiters,
-        remote: Remote,
+        //remote: Remote,
     ) -> GearmanService {
         GearmanService {
             conn_id: conn_id,
@@ -136,7 +139,7 @@ impl GearmanService {
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,
             job_waiters: job_waiters,
-            remote: remote,
+            //remote: remote,
             client_id: RefCell::new(Bytes::new()),
         }
     }
@@ -259,7 +262,7 @@ impl GearmanService {
         };
         let mut workers = self.workers.clone();
         let job_count = self.job_count.clone();
-        let remote = self.remote.clone();
+        //let remote = self.remote.clone();
         let senders_by_conn_id = self.senders_by_conn_id.clone();
         let mut fields = packet.data.clone();
         trace!("fields = {:?}", fields);
@@ -384,9 +387,14 @@ impl GearmanService {
 impl Service<Packet> for GearmanService {
     type Response = Packet;
     type Error = io::Error;
-    type Future = Box<dyn Future<Output = Result<Self::Response, Self::Error>>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
-    fn call(&self, req: Packet) -> Self::Future {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        /* XXX: This should implement backpressure */
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{:?}] Got a req {:?}", self.client_id.borrow(), req);
         match req.ptype {
             ADMIN_VERSION | ADMIN_STATUS => Box::new(future::ok(self.response_from_packet(&req))),
