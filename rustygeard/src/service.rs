@@ -3,7 +3,6 @@ use std::io;
 use std::ops::Drop;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::cell::RefCell;
 use std::pin::Pin;
 
 use core::task::{Context, Poll};
@@ -49,7 +48,7 @@ pub struct GearmanService {
     senders_by_conn_id: SendersByConnId,
     job_waiters: JobWaiters,
     //remote: Remote,
-    client_id: RefCell<Bytes>,
+    client_id: Arc<Mutex<Bytes>>,
 }
 
 pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
@@ -140,7 +139,7 @@ impl GearmanService {
             senders_by_conn_id: senders_by_conn_id,
             job_waiters: job_waiters,
             //remote: remote,
-            client_id: RefCell::new(Bytes::new()),
+            client_id: Arc::new(Mutex::new(Bytes::new())),
         }
     }
 
@@ -378,7 +377,7 @@ impl GearmanService {
         packet: &Packet,
     ) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
-        let mut client_id = self.client_id.borrow_mut();
+        let mut client_id = self.client_id.lock();
         *client_id = d;
         Ok(Self::no_response())
     }
@@ -395,7 +394,7 @@ impl Service<Packet> for GearmanService {
     }
 
     fn call(&mut self, req: Packet) -> Self::Future {
-        debug!("[{:?}] Got a req {:?}", self.client_id.borrow(), req);
+        debug!("[{:?}] Got a req {:?}", self.client_id.unlock(), req);
         match req.ptype {
             ADMIN_VERSION | ADMIN_STATUS => Box::new(future::ok(self.response_from_packet(&req))),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),

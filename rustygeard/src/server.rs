@@ -6,10 +6,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use futures::SinkExt;
 use futures::channel::mpsc::channel;
 use futures::stream::StreamExt;
-//use tokio_io::AsyncRead;
-//use tokio_core::reactor::Core;
+use tokio::runtime;
 use tokio::net::TcpListener;
-//use tokio::stream::StreamExt;
 use tokio_util::codec::Decoder;
 use tower_service::Service;
 
@@ -33,11 +31,6 @@ impl GearmanServer {
         let job_count = Arc::new(AtomicUsize::new(0));
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
-        /*
-        let mut core = Core::new().unwrap();
-        let handle = core.handle();
-        let remote = core.remote();
-        */
         let listener = TcpListener::bind(&addr).await.unwrap();
         let mut incoming = listener.incoming();
         let server = async move {
@@ -77,10 +70,8 @@ impl GearmanServer {
                                 sink.send(packet).await;
                             }
                         };
-                        /*
-                        handle.spawn(reader);
-                        handle.spawn(writer);
-                        */
+                        runtime::Handle::current().spawn(reader);
+                        runtime::Handle::current().spawn(writer);
                     }
                     Err(e) => {
                         error!("{}", e);
