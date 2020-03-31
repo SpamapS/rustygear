@@ -31,7 +31,7 @@ impl GearmanServer {
         let job_count = Arc::new(AtomicUsize::new(0));
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
-        let listener = TcpListener::bind(&addr).await.unwrap();
+        let mut listener = TcpListener::bind(&addr).await.unwrap();
         let mut incoming = listener.incoming();
         let server = async move {
             while let Some(socket_res) = incoming.next().await {
@@ -39,13 +39,13 @@ impl GearmanServer {
                     Ok(sock) => {
                         let conn_id = curr_conn_id.clone().fetch_add(1, Ordering::Relaxed);
                         let pc = PacketCodec{};
-                        let (sink, stream) = pc.framed(sock).split();
-                        let (tx, rx) = channel::<Packet>(MAX_UNHANDLED_OUT_FRAMES);
+                        let (mut sink, mut stream) = pc.framed(sock).split();
+                        let (tx, mut rx) = channel::<Packet>(MAX_UNHANDLED_OUT_FRAMES);
                         {
                             let mut senders_by_conn_id = senders_by_conn_id.lock().unwrap();
                             senders_by_conn_id.insert(conn_id, tx.clone());
                         }
-                        let service = GearmanService::new(
+                        let mut service = GearmanService::new(
                             conn_id,
                             queues.clone(),
                             workers.clone(),
@@ -57,9 +57,11 @@ impl GearmanServer {
                         // Read stuff, write if needed
                         let reader = async move {
                             while let Some(frame) = stream.next().await {
-                                let tx = tx.clone();
-                                if let Ok(response) = service.call(frame.unwrap()).await {
-                                    tx.send(response).await;
+                                let mut tx = tx.clone();
+                                async {
+                                    if let Ok(response) = service.call(frame.unwrap()).await {
+                                        tx.send(response).await;
+                                    };
                                 };
                             }
                         };

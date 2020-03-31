@@ -7,10 +7,10 @@ use std::pin::Pin;
 
 use core::task::{Context, Poll};
 
-use futures::{future, Future, FutureExt};
+use futures::Future;
 use futures::channel::mpsc::Sender;
 use futures::sink::SinkExt;
-//use tokio_core::reactor::Remote;
+use tokio::runtime;
 use tower_service::Service;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -76,20 +76,20 @@ impl Drop for GearmanService {
 
 impl GearmanService {
     /// Things that don't require a body should use this
-    fn response_from_packet(&self, packet: &Packet) -> Packet {
+    async fn response_from_packet(&self, packet: &Packet) -> Result<Packet, io::Error> {
         match packet.ptype {
             ADMIN_VERSION => {
                 let resp_str = b"OK some-rustygear-version\n";
                 let mut resp_body = BytesMut::with_capacity(resp_str.len());
                 resp_body.put(&resp_str[..]);
-                Packet {
+                Ok(Packet {
                     magic: PacketMagic::TEXT,
                     ptype: packet.ptype,
                     psize: resp_str.len() as u32,
                     data: resp_body.freeze(),
-                }
+                })
             }
-            ADMIN_STATUS => admin::admin_command_status(self.queues.clone(), self.workers.clone()),
+            ADMIN_STATUS => Ok(admin::admin_command_status(self.queues.clone(), self.workers.clone())),
             _ => {
                 panic!(
                     "response_from_packet called with invalid ptype: {}",
@@ -107,15 +107,10 @@ impl GearmanService {
             }
             Some(tx) => {
                 let tx = tx.clone();
-                self.remote.spawn(move |handle| {
-                    handle.spawn(tx.send(packet).then(|res| {
-                        match res {
-                            Ok(_) => {}
-                            Err(e) => error!("Send Error! {:?}", e),
-                        }
-                        Ok(())
-                    }));
-                    Ok(())
+                runtime::Handle::current().spawn(async move {
+                    if let Err(e) = tx.send(packet).await {
+                        error!("Send Error! {:?}", e);
+                    }
                 });
             }
         }
@@ -394,32 +389,34 @@ impl Service<Packet> for GearmanService {
     }
 
     fn call(&mut self, req: Packet) -> Self::Future {
-        debug!("[{:?}] Got a req {:?}", self.client_id.unlock(), req);
+        debug!("[{:?}] Got a req {:?}", self.client_id.lock(), req);
         match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS => Box::new(future::ok(self.response_from_packet(&req))),
-            SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
-            SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
-            SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),
-            SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, false, req),
-            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, false, req),
-            SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, false, req),
-            PRE_SLEEP => self.handle_pre_sleep(),
-            CAN_DO => self.handle_can_do(&req),
-            CANT_DO => self.handle_cant_do(&req),
-            GRAB_JOB => self.handle_grab_job(),
-            GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
-            GRAB_JOB_ALL => self.handle_grab_job_all(),
-            WORK_COMPLETE => self.handle_work_complete(&req),
-            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
-            SET_CLIENT_ID => self.handle_set_client_id(&req),
-            ECHO_REQ => Ok(new_res(ECHO_RES, req.data)),
+            ADMIN_VERSION | ADMIN_STATUS => Box::pin(self.response_from_packet(&req)),
+            SUBMIT_JOB => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, true, req)),
+            SUBMIT_JOB_HIGH => Box::pin(self.handle_submit_job(PRIORITY_HIGH, true, req)),
+            SUBMIT_JOB_LOW => Box::pin(self.handle_submit_job(PRIORITY_LOW, true, req)),
+            SUBMIT_JOB_BG => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, false, req)),
+            SUBMIT_JOB_HIGH_BG => Box::pin(self.handle_submit_job(PRIORITY_HIGH, false, req)),
+            SUBMIT_JOB_LOW_BG => Box::pin(self.handle_submit_job(PRIORITY_LOW, false, req)),
+            PRE_SLEEP => Box::pin(self.handle_pre_sleep()),
+            CAN_DO => Box::pin(self.handle_can_do(&req)),
+            CANT_DO => Box::pin(self.handle_cant_do(&req)),
+            GRAB_JOB => Box::pin(self.handle_grab_job()),
+            GRAB_JOB_UNIQ => Box::pin(self.handle_grab_job_uniq()),
+            GRAB_JOB_ALL => Box::pin(self.handle_grab_job_all()),
+            WORK_COMPLETE => Box::pin(self.handle_work_complete(&req)),
+            WORK_STATUS | WORK_DATA | WORK_WARNING => Box::pin(self.handle_work_update(&req)),
+            SET_CLIENT_ID => Box::pin(self.handle_set_client_id(&req)),
+            ECHO_REQ => Box::pin(async { Ok(new_res(ECHO_RES, req.data)) }),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
-                Box::new(future::err(io::Error::new(
+                Box::pin(async { Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("Invalid packet type {}", req.ptype),
-                )))
+                    ))
+                })
             }
-        }
+        };
+        res
     }
 }
