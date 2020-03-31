@@ -76,7 +76,7 @@ impl Drop for GearmanService {
 
 impl GearmanService {
     /// Things that don't require a body should use this
-    async fn response_from_packet(&self, packet: &Packet) -> Result<Packet, io::Error> {
+    fn response_from_packet(&self, packet: &Packet) -> Result<Packet, io::Error> {
         match packet.ptype {
             ADMIN_VERSION => {
                 let resp_str = b"OK some-rustygear-version\n";
@@ -106,7 +106,7 @@ impl GearmanService {
                 panic!("No connection found for conn_id = {}", &conn_id); // XXX You can do better
             }
             Some(tx) => {
-                let tx = tx.clone();
+                let mut tx = tx.clone();
                 runtime::Handle::current().spawn(async move {
                     if let Err(e) = tx.send(packet).await {
                         error!("Send Error! {:?}", e);
@@ -147,7 +147,7 @@ impl GearmanService {
         }
     }
 
-    async fn handle_can_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
+    fn handle_can_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
         let conn_id = self.conn_id;
@@ -158,7 +158,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    async fn handle_cant_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
+    fn handle_cant_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         debug!("CANT_DO fname = {:?}", packet.data);
         let mut worker = worker.lock().unwrap();
@@ -166,7 +166,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    async fn handle_grab_job_all(&self) -> Result<Packet, io::Error> {
+    fn handle_grab_job_all(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -192,7 +192,7 @@ impl GearmanService {
         Ok(new_res(NO_JOB, Bytes::new()))
     }
 
-    async fn handle_grab_job_uniq(&self) -> Result<Packet, io::Error> {
+    fn handle_grab_job_uniq(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -215,7 +215,7 @@ impl GearmanService {
         }
     }
 
-    async fn handle_grab_job(&self) -> Result<Packet, io::Error> {
+    fn handle_grab_job(&self) -> Result<Packet, io::Error> {
         let mut queues = self.queues.clone();
         let worker = self.worker.clone();
         let mut worker = worker.lock().unwrap();
@@ -236,14 +236,14 @@ impl GearmanService {
         Ok(new_res(NO_JOB, Bytes::new()))
     }
 
-    async fn handle_pre_sleep(&self) -> Result<Packet, io::Error> {
+    fn handle_pre_sleep(&self) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
         Ok(Self::no_response())
     }
 
-    async fn handle_submit_job(
+    fn handle_submit_job(
         &self,
         priority: JobQueuePriority,
         wait: bool,
@@ -275,15 +275,8 @@ impl GearmanService {
                                 debug!("No connection found to wake up for conn_id = {}", wake);
                             }
                             Some(tx) => {
-                                let tx = tx.clone();
-                                /* XXX wtf
-                                remote.spawn(move |handle| {
-                                    if let Err(e) = handle.spawn(tx.send(new_noop())) {
-                                        error!("Send Error! {:?}", e);
-                                    };
-                                    Ok(())
-                                });
-                                */
+                                let mut tx = tx.clone();
+                                runtime::Handle::current().spawn(async move { tx.send(new_noop());});
                             }
                         }
                     }
@@ -324,7 +317,7 @@ impl GearmanService {
         })
     }
 
-    async fn handle_work_complete(
+    fn handle_work_complete(
         &self,
         packet: &Packet,
     ) -> Result<Packet, io::Error> {
@@ -355,7 +348,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    async fn handle_work_update(&self, packet: &Packet) -> Result<Packet, io::Error> {
+    fn handle_work_update(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let mut fields = packet.data.clone();
         let handle = next_field(&mut fields).unwrap();
         let job_waiters = self.job_waiters.lock().unwrap();
@@ -367,7 +360,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    async fn handle_set_client_id(
+    fn handle_set_client_id(
         &self,
         packet: &Packet,
     ) -> Result<Packet, io::Error> {
@@ -385,39 +378,42 @@ impl Service<Packet> for GearmanService {
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         /* XXX: This should implement backpressure */
+        trace!("cx = {:?}", cx);
         Poll::Ready(Ok(()))
     }
 
     fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{:?}] Got a req {:?}", self.client_id.lock(), req);
-        Box::pin(async {
-            match req.ptype {
-                ADMIN_VERSION | ADMIN_STATUS => Box::pin(self.response_from_packet(&req).await),
-                SUBMIT_JOB => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, true, req).await),
-                SUBMIT_JOB_HIGH => Box::pin(self.handle_submit_job(PRIORITY_HIGH, true, req).await),
-                SUBMIT_JOB_LOW => Box::pin(self.handle_submit_job(PRIORITY_LOW, true, req).await),
-                SUBMIT_JOB_BG => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, false, req).await),
-                SUBMIT_JOB_HIGH_BG => Box::pin(self.handle_submit_job(PRIORITY_HIGH, false, req).await),
-                SUBMIT_JOB_LOW_BG => Box::pin(self.handle_submit_job(PRIORITY_LOW, false, req).await),
-                PRE_SLEEP => Box::pin(self.handle_pre_sleep().await),
-                CAN_DO => Box::pin(self.handle_can_do(&req).await),
-                CANT_DO => Box::pin(self.handle_cant_do(&req).await),
-                GRAB_JOB => Box::pin(self.handle_grab_job().await),
-                GRAB_JOB_UNIQ => Box::pin(self.handle_grab_job_uniq().await),
-                GRAB_JOB_ALL => Box::pin(self.handle_grab_job_all().await),
-                WORK_COMPLETE => Box::pin(self.handle_work_complete(&req).await),
-                WORK_STATUS | WORK_DATA | WORK_WARNING => Box::pin(self.handle_work_update(&req).await),
-                SET_CLIENT_ID => Box::pin(self.handle_set_client_id(&req).await),
-                ECHO_REQ => Box::pin(async { Ok(new_res(ECHO_RES, req.data)) }.await),
-                _ => {
-                    error!("Unimplemented: {:?} processing packet", req);
-                    Box::pin(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Invalid packet type {}", req.ptype),
-                        ))
+        let res = match req.ptype {
+            ADMIN_VERSION | ADMIN_STATUS => self.response_from_packet(&req),
+            SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
+            SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
+            SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),
+            SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, false, req),
+            SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, false, req),
+            SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, false, req),
+            PRE_SLEEP => self.handle_pre_sleep(),
+            CAN_DO => self.handle_can_do(&req),
+            CANT_DO => self.handle_cant_do(&req),
+            GRAB_JOB => self.handle_grab_job(),
+            GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
+            GRAB_JOB_ALL => self.handle_grab_job_all(),
+            WORK_COMPLETE => self.handle_work_complete(&req),
+            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
+            SET_CLIENT_ID => self.handle_set_client_id(&req),
+            ECHO_REQ => Ok(new_res(ECHO_RES, req.data)),
+            _ => {
+                error!("Unimplemented: {:?} processing packet", req);
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Invalid packet type {}", req.ptype),
                     )
-                }
+                )
             }
-        })
+        };
+        let fut = async {
+            res
+        };
+        Box::pin(fut)
     }
 }

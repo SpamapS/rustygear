@@ -33,7 +33,8 @@ impl GearmanServer {
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
         let mut listener = TcpListener::bind(&addr).await.unwrap();
         let mut incoming = listener.incoming();
-        let server = async move {
+        let mut rt = runtime::Runtime::new().unwrap();
+        rt.block_on(async move {
             while let Some(socket_res) = incoming.next().await {
                 match socket_res {
                     Ok(sock) => {
@@ -58,11 +59,11 @@ impl GearmanServer {
                         let reader = async move {
                             while let Some(frame) = stream.next().await {
                                 let mut tx = tx.clone();
-                                async {
+                                runtime::Handle::current().spawn(async {
                                     if let Ok(response) = service.call(frame.unwrap()).await {
                                         tx.send(response).await;
                                     };
-                                };
+                                });
                             }
                         };
                         
@@ -80,7 +81,6 @@ impl GearmanServer {
                     }
                 }
             };
-        };
-        //core.run(server).unwrap();
+        })
     }
 }
