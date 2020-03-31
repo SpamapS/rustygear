@@ -390,33 +390,34 @@ impl Service<Packet> for GearmanService {
 
     fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{:?}] Got a req {:?}", self.client_id.lock(), req);
-        match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS => Box::pin(self.response_from_packet(&req)),
-            SUBMIT_JOB => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, true, req)),
-            SUBMIT_JOB_HIGH => Box::pin(self.handle_submit_job(PRIORITY_HIGH, true, req)),
-            SUBMIT_JOB_LOW => Box::pin(self.handle_submit_job(PRIORITY_LOW, true, req)),
-            SUBMIT_JOB_BG => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, false, req)),
-            SUBMIT_JOB_HIGH_BG => Box::pin(self.handle_submit_job(PRIORITY_HIGH, false, req)),
-            SUBMIT_JOB_LOW_BG => Box::pin(self.handle_submit_job(PRIORITY_LOW, false, req)),
-            PRE_SLEEP => Box::pin(self.handle_pre_sleep()),
-            CAN_DO => Box::pin(self.handle_can_do(&req)),
-            CANT_DO => Box::pin(self.handle_cant_do(&req)),
-            GRAB_JOB => Box::pin(self.handle_grab_job()),
-            GRAB_JOB_UNIQ => Box::pin(self.handle_grab_job_uniq()),
-            GRAB_JOB_ALL => Box::pin(self.handle_grab_job_all()),
-            WORK_COMPLETE => Box::pin(self.handle_work_complete(&req)),
-            WORK_STATUS | WORK_DATA | WORK_WARNING => Box::pin(self.handle_work_update(&req)),
-            SET_CLIENT_ID => Box::pin(self.handle_set_client_id(&req)),
-            ECHO_REQ => Box::pin(async { Ok(new_res(ECHO_RES, req.data)) }),
-            _ => {
-                error!("Unimplemented: {:?} processing packet", req);
-                Box::pin(async { Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Invalid packet type {}", req.ptype),
-                    ))
-                })
+        Box::pin(async {
+            match req.ptype {
+                ADMIN_VERSION | ADMIN_STATUS => Box::pin(self.response_from_packet(&req).await),
+                SUBMIT_JOB => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, true, req).await),
+                SUBMIT_JOB_HIGH => Box::pin(self.handle_submit_job(PRIORITY_HIGH, true, req).await),
+                SUBMIT_JOB_LOW => Box::pin(self.handle_submit_job(PRIORITY_LOW, true, req).await),
+                SUBMIT_JOB_BG => Box::pin(self.handle_submit_job(PRIORITY_NORMAL, false, req).await),
+                SUBMIT_JOB_HIGH_BG => Box::pin(self.handle_submit_job(PRIORITY_HIGH, false, req).await),
+                SUBMIT_JOB_LOW_BG => Box::pin(self.handle_submit_job(PRIORITY_LOW, false, req).await),
+                PRE_SLEEP => Box::pin(self.handle_pre_sleep().await),
+                CAN_DO => Box::pin(self.handle_can_do(&req).await),
+                CANT_DO => Box::pin(self.handle_cant_do(&req).await),
+                GRAB_JOB => Box::pin(self.handle_grab_job().await),
+                GRAB_JOB_UNIQ => Box::pin(self.handle_grab_job_uniq().await),
+                GRAB_JOB_ALL => Box::pin(self.handle_grab_job_all().await),
+                WORK_COMPLETE => Box::pin(self.handle_work_complete(&req).await),
+                WORK_STATUS | WORK_DATA | WORK_WARNING => Box::pin(self.handle_work_update(&req).await),
+                SET_CLIENT_ID => Box::pin(self.handle_set_client_id(&req).await),
+                ECHO_REQ => Box::pin(async { Ok(new_res(ECHO_RES, req.data)) }.await),
+                _ => {
+                    error!("Unimplemented: {:?} processing packet", req);
+                    Box::pin(Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Invalid packet type {}", req.ptype),
+                        ))
+                    )
+                }
             }
-        };
-        res
+        })
     }
 }
