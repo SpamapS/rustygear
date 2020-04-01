@@ -46,23 +46,25 @@ impl GearmanServer {
                             let mut senders_by_conn_id = senders_by_conn_id.lock().unwrap();
                             senders_by_conn_id.insert(conn_id, tx.clone());
                         }
-                        let mut service = GearmanService::new(
-                            conn_id,
-                            queues.clone(),
-                            workers.clone(),
-                            job_count.clone(),
-                            senders_by_conn_id.clone(),
-                            job_waiters.clone(),
-                            //remote.clone(),
-                        );
                         // Read stuff, write if needed
                         let reader = async move {
+                            let mut service = GearmanService::new(
+                                conn_id,
+                                queues.clone(),
+                                workers.clone(),
+                                job_count.clone(),
+                                senders_by_conn_id.clone(),
+                                job_waiters.clone(),
+                            );
                             while let Some(frame) = stream.next().await {
                                 let mut tx = tx.clone();
                                 runtime::Handle::current().spawn(async {
-                                    if let Ok(response) = service.call(frame.unwrap()).await {
-                                        tx.send(response).await;
-                                    };
+                                    async move {
+                                        let response = service.call(frame.unwrap()).await;
+                                        if let Ok(response) = response {
+                                            tx.send(response).await;
+                                        }
+                                    }
                                 });
                             }
                         };
