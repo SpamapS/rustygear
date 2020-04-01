@@ -1,15 +1,8 @@
 language: rust
 rust: nightly
 cache: cargo
-before_install: (cargo install rustfmt || true)
+before_script:
+- rustup component add rustfmt
 script:
-- |
-  PATH=$HOME/.cargo/bin:$PATH;
-  cd rustygear
-  cargo fmt -- --write-mode=diff &&
-  cargo build &&
-  cargo test
-  cd rustygeard
-  cargo fmt -- --write-mode=diff &&
-  cargo build &&
-  cargo test
+- cd rustygear && cargo fmt -- check && cargo test
+- cd rustygeard && cargo fmt -- check && cargo test
