@@ -1,6 +1,6 @@
 extern crate wrappinghashset;
 
-use self::wrappinghashset::{WrappingHashSet, Iter};
+use self::wrappinghashset::{Iter, WrappingHashSet};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -74,8 +74,7 @@ impl Wake for SharedWorkers {
             let mut add = false;
             debug!(
                 "Looking for {:?} in workers.allworkers, {:?}",
-                &fname,
-                &workers.allworkers
+                &fname, &workers.allworkers
             );
             match workers.allworkers.get_mut(&fname) {
                 None => {
@@ -182,19 +181,17 @@ impl Worker {
     pub fn unassign_job(&mut self, handle: &Bytes) {
         match self.jobs.remove(handle) {
             None => warn!("Worker was not assigned {:?}", handle),
-            Some(ref j) => {
-                match Arc::weak_count(j) {
-                    0 => {}
-                    a @ _ => {
-                        warn!(
-                            "Unassigning queued {:?} ({}+{} refs)",
-                            j,
-                            Arc::strong_count(j),
-                            a
-                        );
-                    }
+            Some(ref j) => match Arc::weak_count(j) {
+                0 => {}
+                a @ _ => {
+                    warn!(
+                        "Unassigning queued {:?} ({}+{} refs)",
+                        j,
+                        Arc::strong_count(j),
+                        a
+                    );
                 }
-            }
+            },
         }
     }
 

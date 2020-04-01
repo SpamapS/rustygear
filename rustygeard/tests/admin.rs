@@ -12,7 +12,7 @@ use rustygear::job::Job;
 
 use rustygeard::admin::admin_command_status;
 use rustygeard::queues::{HandleJobStorage, SharedJobStorage};
-use rustygeard::worker::{Worker, SharedWorkers, Wake};
+use rustygeard::worker::{SharedWorkers, Wake, Worker};
 
 #[test]
 fn admin_command_status_1job() {

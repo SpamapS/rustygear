@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex, Weak};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Mutex, Weak};
 
 use bytes::Bytes;
 
@@ -106,7 +106,6 @@ impl HandleJobStorage for SharedJobStorage {
         Some(handle)
     }
 
-
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>) {
         let job = job.clone();
         trace!(
@@ -141,14 +140,12 @@ impl HandleJobStorage for SharedJobStorage {
                 remotes_by_handle.push(remote);
             }
         }
-        storage.remotes_by_unique.insert(
-            job.unique.clone(),
-            remotes_by_unique,
-        );
-        storage.remotes_by_handle.insert(
-            job.handle.clone(),
-            remotes_by_handle,
-        );
+        storage
+            .remotes_by_unique
+            .insert(job.unique.clone(), remotes_by_unique);
+        storage
+            .remotes_by_handle
+            .insert(job.handle.clone(), remotes_by_handle);
         trace!(
             "job {:?} weak = {} strong = {}",
             &job,
@@ -175,15 +172,13 @@ impl HandleJobStorage for SharedJobStorage {
                             debug!("Queue has items! {:?}", q.len());
                             match q.pop_front() {
                                 None => break,
-                                Some(a_job) => {
-                                    match a_job.upgrade() {
-                                        None => trace!("Deleted job encountered."),
-                                        Some(a_job) => {
-                                            job = Some(a_job);
-                                            break;
-                                        }
+                                Some(a_job) => match a_job.upgrade() {
+                                    None => trace!("Deleted job encountered."),
+                                    Some(a_job) => {
+                                        job = Some(a_job);
+                                        break;
                                     }
-                                }
+                                },
                             }
                         }
                         if job.is_some() {

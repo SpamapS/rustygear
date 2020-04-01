@@ -5,7 +5,6 @@ extern crate env_logger;
 extern crate rustygear;
 extern crate rustygeard;
 
-
 use rustygeard::server::GearmanServer;
 
 fn main() {

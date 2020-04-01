@@ -1,6 +1,7 @@
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate log;
 pub mod admin;
-pub mod server;
-pub mod worker;
 pub mod queues;
+pub mod server;
 pub mod service;
+pub mod worker;

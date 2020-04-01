@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::io;
 use std::ops::Drop;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use core::task::{Context, Poll};
 
@@ -20,7 +20,7 @@ use rustygear::job::Job;
 
 use crate::admin;
 use crate::queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
-use crate::worker::{SharedWorkers, Worker, Wake};
+use crate::worker::{SharedWorkers, Wake, Worker};
 
 pub fn new_res(ptype: u32, data: Bytes) -> Packet {
     Packet {
@@ -72,7 +72,6 @@ impl Drop for GearmanService {
     }
 }
 
-
 impl GearmanService {
     /// Things that don't require a body should use this
     fn response_from_packet(&self, packet: &Packet) -> Result<Packet, io::Error> {
@@ -88,13 +87,14 @@ impl GearmanService {
                     data: resp_body.freeze(),
                 })
             }
-            ADMIN_STATUS => Ok(admin::admin_command_status(self.queues.clone(), self.workers.clone())),
-            _ => {
-                panic!(
-                    "response_from_packet called with invalid ptype: {}",
-                    packet.ptype
-                )
-            }
+            ADMIN_STATUS => Ok(admin::admin_command_status(
+                self.queues.clone(),
+                self.workers.clone(),
+            )),
+            _ => panic!(
+                "response_from_packet called with invalid ptype: {}",
+                packet.ptype
+            ),
         }
     }
 
@@ -210,7 +210,7 @@ impl GearmanService {
                 data.extend(&j.data);
                 Ok(new_res(JOB_ASSIGN_UNIQ, data.freeze()))
             }
-            None => Ok(new_res(NO_JOB, Bytes::new()))
+            None => Ok(new_res(NO_JOB, Bytes::new())),
         }
     }
 
@@ -320,10 +320,7 @@ impl GearmanService {
         })
     }
 
-    fn handle_work_complete(
-        &self,
-        packet: &Packet,
-    ) -> Result<Packet, io::Error> {
+    fn handle_work_complete(&self, packet: &Packet) -> Result<Packet, io::Error> {
         // Search for handle
         let mut fields = packet.data.clone();
         let handle = next_field(&mut fields).unwrap();
@@ -363,10 +360,7 @@ impl GearmanService {
         Ok(Self::no_response())
     }
 
-    fn handle_set_client_id(
-        &self,
-        packet: &Packet,
-    ) -> Result<Packet, io::Error> {
+    fn handle_set_client_id(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
         let mut client_id = self.client_id.lock().unwrap();
         *client_id = d;
@@ -410,13 +404,10 @@ impl Service<Packet> for GearmanService {
                 Err(io::Error::new(
                     io::ErrorKind::Other,
                     format!("Invalid packet type {}", req.ptype),
-                    )
-                )
+                ))
             }
         };
-        let fut = async {
-            res
-        };
+        let fut = async { res };
         Box::pin(fut)
     }
 }

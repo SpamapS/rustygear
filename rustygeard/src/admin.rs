@@ -22,7 +22,8 @@ pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -
                 qtot,
                 active_workers,
                 inactive_workers + active_workers
-            ).into_bytes(),
+            )
+            .into_bytes(),
         );
     }
     response.extend(b".\n");
