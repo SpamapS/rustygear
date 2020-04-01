@@ -4,7 +4,6 @@ extern crate env_logger;
 
 extern crate rustygear;
 extern crate rustygeard;
-extern crate tokio_core;
 
 
 use rustygeard::server::GearmanServer;

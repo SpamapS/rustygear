@@ -8,12 +8,11 @@ use std::pin::Pin;
 use core::task::{Context, Poll};
 
 use futures::Future;
-use futures::channel::mpsc::Sender;
-use futures::sink::SinkExt;
 use tokio::runtime;
+use tokio::sync::mpsc::Sender;
 use tower_service::Service;
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use rustygear::codec::{Packet, PacketMagic};
 use rustygear::constants::*;
@@ -55,7 +54,7 @@ pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
     match buf[..].iter().position(|b| *b == b'\0') {
         Some(null_pos) => {
             let value = buf.split_to(null_pos);
-            buf.split_to(1);
+            buf.advance(1);
             Ok(value)
         }
         None => {
@@ -276,7 +275,11 @@ impl GearmanService {
                             }
                             Some(tx) => {
                                 let mut tx = tx.clone();
-                                runtime::Handle::current().spawn(async move { tx.send(new_noop());});
+                                runtime::Handle::current().spawn(async move {
+                                    if let Err(_) = tx.send(new_noop()).await {
+                                        error!("worker receiver dropped");
+                                    };
+                                });
                             }
                         }
                     }
