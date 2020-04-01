@@ -5,6 +5,7 @@ before_script: (cargo install rustfmt || true)
 script:
 - |
   PATH=$HOME/.cargo/bin:$PATH;
+  rustup component add rustfmt --toolchain nightly-x86_64-unknown-linux-gnu
   cd rustygear
   cargo fmt -- --write-mode=diff &&
   cargo build &&

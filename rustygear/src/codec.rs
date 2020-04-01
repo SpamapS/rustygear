@@ -2,7 +2,7 @@ use std::fmt;
 use std::io;
 use std::str;
 
-use bytes::{Bytes, BytesMut, Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use tokio_util::codec::{Decoder, Encoder};
 
 use crate::constants::*;
@@ -111,7 +111,6 @@ impl Packet {
 }
 
 pub struct PacketCodec;
-
 
 impl Decoder for PacketCodec {
     type Item = Packet;
