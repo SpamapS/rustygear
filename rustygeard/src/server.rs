@@ -47,7 +47,8 @@ impl GearmanServer {
                             senders_by_conn_id.insert(conn_id, tx.clone());
                         }
                         // Read stuff, write if needed
-                        let reader = async move {
+                        let tx = tx.clone();
+                        let reader = async {
                             let mut service = GearmanService::new(
                                 conn_id,
                                 queues.clone(),
@@ -57,13 +58,12 @@ impl GearmanServer {
                                 job_waiters.clone(),
                             );
                             while let Some(frame) = stream.next().await {
-                                let mut tx = tx.clone();
+                                let response = service.call(frame.unwrap()).await;
+                                let tx = tx.clone();
                                 runtime::Handle::current().spawn(async {
-                                    async move {
-                                        let response = service.call(frame.unwrap()).await;
-                                        if let Ok(response) = response {
-                                            tx.send(response).await;
-                                        }
+                                    let mut tx = tx.clone();
+                                    if let Ok(response) = response {
+                                        tx.send(response).await;
                                     }
                                 });
                             }
