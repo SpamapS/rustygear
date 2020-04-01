@@ -1,8 +1,6 @@
 language: rust
 rust: nightly
 cache: cargo
-before_script:
-- rustup component add rustfmt
 script:
-- cd rustygear && cargo fmt -- check && cargo test
-- cd rustygeard && cargo fmt -- check && cargo test
+- cd rustygear && cargo test
+- cd rustygeard && cargo test
