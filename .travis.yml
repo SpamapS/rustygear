@@ -3,4 +3,4 @@ rust: nightly
 cache: cargo
 script:
 - cd rustygear && cargo test
-- cd rustygeard && cargo test
+- cd ../rustygeard && cargo test
