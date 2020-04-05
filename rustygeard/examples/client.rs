@@ -8,11 +8,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = Client::new().add_server("127.0.0.1:4730").connect().await?;
     println!("Connected!");
     println!("Echo: {:?}", client.echo(b"blah").await);
-    /* TODO
-    let job = client.submit("reverse", "abcdefg").await;
-    println!("Submitted {}", job.handle());
+    let mut job = client.submit("reverse", b"abcdefg").await?;
+    println!("Submitted {:?}", job.handle());
     let response = job.response().await;
-    println!("Got Back {}", response.data());
-    */
+    println!("Got Back {:?}", response);
     Ok(())
 }

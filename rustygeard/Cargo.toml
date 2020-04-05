@@ -14,3 +14,4 @@ tokio-util = { version = "*", features = ["codec"] }
 tower-service = "*"
 futures = "*"
 wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }
+uuid = { version = "*", features = ["v4"] }

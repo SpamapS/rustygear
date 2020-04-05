@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut, BufMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::Future;
@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Decoder;
 
 use tower_service::Service;
+use uuid::Uuid;
 
 use crate::service::{new_req, next_field, no_response};
 use rustygear::codec::{Packet, PacketCodec};
@@ -29,12 +30,30 @@ pub struct Client {
     client_id: Option<Bytes>,
     echo_tx: mpsc::Sender<Bytes>,
     echo_rx: mpsc::Receiver<Bytes>,
+    job_created_tx: mpsc::Sender<Bytes>,
+    job_created_rx: mpsc::Receiver<Bytes>,
 }
 
 struct ClientHandler {
     client_id: Option<Bytes>,
     sink_tx: mpsc::Sender<Packet>,
     echo_tx: mpsc::Sender<Bytes>,
+    job_created_tx: mpsc::Sender<Bytes>,
+}
+
+pub struct ClientJob {
+    handle: Bytes,
+    response_tx: mpsc::Sender<Bytes>,
+    response_rx: mpsc::Receiver<Bytes>,
+}
+
+impl ClientJob {
+    pub fn handle(&self) -> &Bytes {
+        &self.handle
+    }
+    pub async fn response(&mut self) -> Result<Bytes, io::Error> {
+        Ok(self.response_rx.recv().await.unwrap())
+    }
 }
 
 impl Service<Packet> for ClientHandler {
@@ -80,6 +99,7 @@ impl Service<Packet> for ClientHandler {
 impl Client {
     pub fn new() -> Client {
         let (tx, rx) = mpsc::channel(100); // XXX this is lame
+        let (txj, rxj) = mpsc::channel(100); // XXX this is lame
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
@@ -87,6 +107,8 @@ impl Client {
             client_id: None,
             echo_tx: tx,
             echo_rx: rx,
+            job_created_tx: txj,
+            job_created_rx: rxj,
         }
     }
 
@@ -125,7 +147,7 @@ impl Client {
             let (tx, mut rx) = mpsc::channel(100); // XXX pick a good value or const
             let tx = tx.clone();
             let tx2 = tx.clone();
-            let handler = Arc::new(Mutex::new(ClientHandler::new(&self.client_id, self.echo_tx.clone(), tx2)));
+            let handler = Arc::new(Mutex::new(ClientHandler::new(&self.client_id, self.echo_tx.clone(), tx2, self.job_created_tx.clone())));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
             let reader = async move {
@@ -178,23 +200,49 @@ impl Client {
         Ok(())
     }
 
-    /* TODO
-    pub async fn submit(function: &str, payload: Vec<u8>) {
-        let conns = self.conns.lock().unwrap();
+    pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
+        let mut conns = self.conns.lock().unwrap();
         /* Pick the conn later */
-        conn = conns[0];
-
+        match conns.get_mut(0) {
+            Some(conn) => {
+                let unique = format!("{}", Uuid::new_v4());
+                let mut data = BytesMut::with_capacity(
+                    2 + function.len() + unique.len() + payload.len()); // 2 for nulls
+                data.extend(function.bytes());
+                data.put_u8(b'\0');
+                data.extend(unique.bytes());
+                data.put_u8(b'\0');
+                data.extend(payload);
+                let packet = new_req(SUBMIT_JOB, data.freeze());
+                let mut conn = conn.lock().unwrap();
+                if let Err(e) = conn.sink_tx.send(packet).await {
+                    error!("Receiver dropped");
+                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)))
+                } else {
+                    if let Some(handle) = self.job_created_rx.recv().await {
+                        let (tx, rx) = mpsc::channel(100); // XXX lamer
+                        Ok(ClientJob { handle: handle, response_tx: tx, response_rx: rx })
+                    } else {
+                        Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
+                    }
+                }
+            }
+            None => {
+                error!("No connections on which to submit.");
+                Err(io::Error::new(io::ErrorKind::Other, "No Connections on which to submit"))
+            }
+        }
     }
-    */
 }
 
 impl ClientHandler {
 
-    fn new(client_id: &Option<Bytes>, echo_tx: mpsc::Sender<Bytes>, sink_tx: mpsc::Sender<Packet>) -> ClientHandler {
+    fn new(client_id: &Option<Bytes>, echo_tx: mpsc::Sender<Bytes>, sink_tx: mpsc::Sender<Packet>, job_created_tx: mpsc::Sender<Bytes>) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
             echo_tx: echo_tx,
             sink_tx: sink_tx,
+            job_created_tx: job_created_tx,
         }
     }
 
@@ -208,6 +256,9 @@ impl ClientHandler {
 
     fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Job Created: {:?}", req);
+        let mut tx = self.job_created_tx.clone();
+        let handle = req.data.clone();
+        runtime::Handle::current().spawn(async move { tx.send(handle).await });
         Ok(no_response())
     }
 
