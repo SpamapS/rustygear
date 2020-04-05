@@ -31,6 +31,15 @@ pub fn new_res(ptype: u32, data: Bytes) -> Packet {
     }
 }
 
+pub fn new_req(ptype: u32, data: Bytes) -> Packet {
+    Packet {
+        magic: PacketMagic::REQ,
+        ptype: ptype,
+        psize: data.len() as u32,
+        data: data,
+    }
+}
+
 fn new_noop() -> Packet {
     new_res(NOOP, Bytes::new())
 }
@@ -61,6 +70,15 @@ pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
             let buflen = buf.len();
             Ok(buf.split_to(buflen))
         }
+    }
+}
+
+pub fn no_response() -> Packet {
+    Packet {
+        magic: PacketMagic::TEXT,
+        ptype: ADMIN_RESPONSE,
+        psize: 0,
+        data: Bytes::new(),
     }
 }
 
@@ -137,15 +155,6 @@ impl GearmanService {
         }
     }
 
-    fn no_response() -> Packet {
-        Packet {
-            magic: PacketMagic::TEXT,
-            ptype: ADMIN_RESPONSE,
-            psize: 0,
-            data: Bytes::new(),
-        }
-    }
-
     fn handle_can_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let workers = self.workers.clone();
@@ -154,7 +163,7 @@ impl GearmanService {
         let mut worker = worker.lock().unwrap();
         worker.can_do(packet.data.clone());
         workers.clone().wakeup(&mut worker, conn_id);
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 
     fn handle_cant_do(&self, packet: &Packet) -> Result<Packet, io::Error> {
@@ -162,7 +171,7 @@ impl GearmanService {
         debug!("CANT_DO fname = {:?}", packet.data);
         let mut worker = worker.lock().unwrap();
         worker.cant_do(&packet.data);
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 
     fn handle_grab_job_all(&self) -> Result<Packet, io::Error> {
@@ -239,7 +248,7 @@ impl GearmanService {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
         self.workers.clone().sleep(w, self.conn_id);
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 
     fn handle_submit_job(
@@ -345,7 +354,7 @@ impl GearmanService {
                 self.send_to_conn_id(*conn_id, packet.clone());
             }
         }
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 
     fn handle_work_update(&self, packet: &Packet) -> Result<Packet, io::Error> {
@@ -357,14 +366,14 @@ impl GearmanService {
                 self.send_to_conn_id(*conn_id, packet.clone());
             }
         }
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 
     fn handle_set_client_id(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
         let mut client_id = self.client_id.lock().unwrap();
         *client_id = d;
-        Ok(Self::no_response())
+        Ok(no_response())
     }
 }
 
