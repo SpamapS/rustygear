@@ -24,13 +24,20 @@ type Hostname = String;
 
 pub struct Client {
     servers: Vec<Hostname>,
-    conns: Arc<Mutex<Vec<mpsc::Sender<Result<Packet, io::Error>>>>>,
+    conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
     connected: Vec<bool>,
     client_id: Option<Bytes>,
-    echo_tx: Option<mpsc::Sender<Bytes>>,
+    echo_tx: mpsc::Sender<Bytes>,
+    echo_rx: mpsc::Receiver<Bytes>,
 }
 
-impl Service<Packet> for Client {
+struct ClientHandler {
+    client_id: Option<Bytes>,
+    sink_tx: mpsc::Sender<Packet>,
+    echo_tx: mpsc::Sender<Bytes>,
+}
+
+impl Service<Packet> for ClientHandler {
     type Response = Packet;
     type Error = io::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -72,12 +79,14 @@ impl Service<Packet> for Client {
 
 impl Client {
     pub fn new() -> Client {
+        let (tx, rx) = mpsc::channel(100); // XXX this is lame
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
             connected: Vec::new(),
             client_id: None,
-            echo_tx: None,
+            echo_tx: tx,
+            echo_rx: rx,
         }
     }
 
@@ -92,7 +101,7 @@ impl Client {
         self
     }
 
-    pub async fn connect(self) -> Result<Arc<Mutex<Self>>, Box<dyn std::error::Error>> {
+    pub async fn connect(mut self) -> Result<Self, Box<dyn std::error::Error>> {
         /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
         let mut i = 0;
@@ -106,33 +115,33 @@ impl Client {
             }
             i = i + 1;
         }
-        let aclient = Arc::new(Mutex::new(self));
         for connect in connects.iter_mut() {
-            let aclient = aclient.clone();
             let connect = connect.await?;
             let offset = connect.0;
             let conn = connect.1?;
-            trace!("connected: offset={}", offset);
+            trace!("connected: offset={} server={}", offset, self.servers[offset]);
             let pc = PacketCodec {};
             let (mut sink, mut stream) = pc.framed(conn).split();
             let (tx, mut rx) = mpsc::channel(100); // XXX pick a good value or const
             let tx = tx.clone();
             let tx2 = tx.clone();
-            {
-                let mut client = aclient.lock().unwrap();
-                client.connected[offset] = true;
-                client.conns.lock().unwrap().insert(offset, tx2);
-            }
+            let handler = Arc::new(Mutex::new(ClientHandler::new(&self.client_id, self.echo_tx.clone(), tx2)));
+            self.connected[offset] = true;
+            self.conns.lock().unwrap().insert(offset, handler.clone());
             let reader = async move {
                 let mut tx = tx.clone();
                 while let Some(frame) = stream.next().await {
                     let response = {
-                        let aclient3 = aclient.clone();
-                        let mut aclient = aclient3.lock().unwrap();
-                        aclient.call(frame.unwrap())
+                        let handler = handler.clone();
+                        let mut handler = handler.lock().unwrap();
+                        handler.call(frame.unwrap())
                     };
                     let response = response.await;
-                    if let Err(_) = tx.send(response).await {
+                    if let Err(e) = response {
+                        error!("conn dropped?: {}", e);
+                        return
+                    }
+                    if let Err(_) = tx.send(response.unwrap()).await {
                         error!("receiver dropped")
                     }
                 }
@@ -140,10 +149,7 @@ impl Client {
             let writer = async move {
                 while let Some(packet) = rx.next().await {
                     trace!("Sending {:?}", &packet);
-                    if let Err(_) = packet {
-                        error!("Receiver failed");
-                    }
-                    if let Err(_) = sink.send(packet.unwrap()).await {
+                    if let Err(_) = sink.send(packet).await {
                         error!("Connection ({}) dropped", offset);
                     }
                 }
@@ -152,21 +158,20 @@ impl Client {
             runtime::Handle::current().spawn(writer);
         }
         trace!("connected all");
-        Ok(aclient)
+        Ok(self)
     }
 
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let payload = payload.clone();
-        let (tx, mut rx) = mpsc::channel(1);
-        self.echo_tx = Some(tx);
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
         if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
-            if let Err(_) = conn.send(Ok(packet)).await {
+            let mut conn = conn.lock().unwrap();
+            if let Err(_) = conn.sink_tx.send(packet).await {
                 error!("Receiver dropped")
             }
         }
         debug!("Waiting for echo response");
-        match rx.recv().await {
+        match self.echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
             None => info!("echo channel closed"),
         };
@@ -181,20 +186,24 @@ impl Client {
 
     }
     */
+}
+
+impl ClientHandler {
+
+    fn new(client_id: &Option<Bytes>, echo_tx: mpsc::Sender<Bytes>, sink_tx: mpsc::Sender<Packet>) -> ClientHandler {
+        ClientHandler {
+            client_id: client_id.clone(),
+            echo_tx: echo_tx,
+            sink_tx: sink_tx,
+        }
+    }
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Echo response received: {:?}", req.data);
-        if let Some(echo_tx) = &self.echo_tx {
-            let mut tx = echo_tx.clone();
-            let data = req.data.clone();
-            runtime::Handle::current().spawn(async move { tx.send(data).await });
-            Ok(no_response())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Rogue echo response received {:?}", req.data),
-            ))
-        }
+        let mut tx = self.echo_tx.clone();
+        let data = req.data.clone();
+        runtime::Handle::current().spawn(async move { tx.send(data).await });
+        Ok(no_response())
     }
 
     fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
