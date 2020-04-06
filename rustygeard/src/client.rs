@@ -18,10 +18,21 @@ use tower_service::Service;
 use uuid::Uuid;
 
 use crate::service::{new_req, next_field, no_response};
+use crate::util::bytes2bool;
 use rustygear::codec::{Packet, PacketCodec};
 use rustygear::constants::*;
 
 type Hostname = String;
+
+#[derive(Debug)]
+pub struct JobStatus{
+    handle: Bytes,
+    known: bool,
+    running: bool,
+    numerator: u8,
+    denominator: u8,
+    waiting: u32,
+}
 
 pub struct Client {
     servers: Vec<Hostname>,
@@ -32,6 +43,8 @@ pub struct Client {
     echo_rx: Receiver<Bytes>,
     job_created_tx: Sender<Bytes>,
     job_created_rx: Receiver<Bytes>,
+    status_res_tx: Sender<JobStatus>,
+    status_res_rx: Receiver<JobStatus>,
 }
 
 struct ClientHandler {
@@ -39,6 +52,7 @@ struct ClientHandler {
     sink_tx: Sender<Packet>,
     echo_tx: Sender<Bytes>,
     job_created_tx: Sender<Bytes>,
+    status_res_tx: Sender<JobStatus>,
 }
 
 pub struct ClientJob {
@@ -100,6 +114,7 @@ impl Client {
     pub fn new() -> Client {
         let (tx, rx) = channel(100); // XXX this is lame
         let (txj, rxj) = channel(100); // XXX this is lame
+        let (txs, rxs) = channel(100); // XXX this is lame
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
@@ -109,6 +124,8 @@ impl Client {
             echo_rx: rx,
             job_created_tx: txj,
             job_created_rx: rxj,
+            status_res_tx: txs,
+            status_res_rx: rxs,
         }
     }
 
@@ -159,6 +176,7 @@ impl Client {
                 self.echo_tx.clone(),
                 tx2,
                 self.job_created_tx.clone(),
+                self.status_res_tx.clone(),
             )));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
@@ -216,6 +234,14 @@ impl Client {
     }
 
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
+        self.direct_submit(SUBMIT_JOB, function, payload).await
+    }
+
+    pub async fn submit_background(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
+        self.direct_submit(SUBMIT_JOB_BG, function, payload).await
+    }
+
+    async fn direct_submit(&mut self, ptype: u32, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
         let mut conns = self.conns.lock().unwrap();
         /* Pick the conn later */
         match conns.get_mut(0) {
@@ -228,7 +254,7 @@ impl Client {
                 data.extend(unique.bytes());
                 data.put_u8(b'\0');
                 data.extend(payload);
-                let packet = new_req(SUBMIT_JOB, data.freeze());
+                let packet = new_req(ptype, data.freeze());
                 {
                     let mut conn = conn.lock().unwrap();
                     if let Err(e) = conn.sink_tx.send(packet).await {
@@ -257,6 +283,26 @@ impl Client {
             }
         }
     }
+
+    pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
+        let mut conns = self.conns.lock().unwrap();
+        let conn = conns.get_mut(0).unwrap();
+        let mut payload = BytesMut::with_capacity(handle.len());
+        payload.extend(handle);
+        let status_req = new_req(GET_STATUS, payload.freeze());
+        {
+            let mut conn = conn.lock().unwrap();
+            if let Err(e) = conn.sink_tx.send(status_req).await {
+                error!("Receiver dropped");
+                return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
+            }
+        }
+        if let Some(status_res) = self.status_res_rx.recv().await {
+            Ok(status_res)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
+        }
+    }
 }
 
 impl ClientHandler {
@@ -265,12 +311,14 @@ impl ClientHandler {
         echo_tx: Sender<Bytes>,
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
+        status_res_tx: Sender<JobStatus>,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
             echo_tx: echo_tx,
             sink_tx: sink_tx,
             job_created_tx: job_created_tx,
+            status_res_tx: status_res_tx,
         }
     }
 
@@ -301,21 +349,19 @@ impl ClientHandler {
 
     fn handle_status_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         let mut req = req.clone();
-        let handle = next_field(&mut req.data).unwrap();
-        let known = next_field(&mut req.data).unwrap();
-        let running = next_field(&mut req.data).unwrap();
-        let numerator = next_field(&mut req.data).unwrap();
-        let denominator = next_field(&mut req.data).unwrap();
-        /*
+        let mut js = JobStatus {
+            handle: next_field(&mut req.data),
+            known: bytes2bool(&next_field(&mut req.data)),
+            running: bytes2bool(&next_field(&mut req.data)),
+            numerator: String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap(), // XXX we can do better
+            denominator: String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap(),
+            waiting: 0,
+        };
         if req.ptype == STATUS_RES_UNIQUE {
-            let waiting = next_field(req.data).unwrap();
-            if let Some(status_unique_call) = self.status_unique_call {
-                status_unique_call(handle, known, running, numerator, denominator, waiting)
-            }
-        } else if let Some(status_call) = self.status_call {
-            status_call(handle, known, running, numerator, denominator)
+            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap();
         }
-        */
+        let mut tx = self.status_res_tx.clone();
+        runtime::Handle::current().spawn(async move { tx.send(js).await });
         Ok(no_response())
     }
 

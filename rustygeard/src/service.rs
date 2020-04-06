@@ -59,16 +59,16 @@ pub struct GearmanService {
     client_id: Arc<Mutex<Bytes>>,
 }
 
-pub fn next_field(buf: &mut Bytes) -> Result<Bytes, io::Error> {
+pub fn next_field(buf: &mut Bytes) -> Bytes {
     match buf[..].iter().position(|b| *b == b'\0') {
         Some(null_pos) => {
             let value = buf.split_to(null_pos);
             buf.advance(1);
-            Ok(value)
+            value
         }
         None => {
             let buflen = buf.len();
-            Ok(buf.split_to(buflen))
+            buf.split_to(buflen)
         }
     }
 }
@@ -268,8 +268,8 @@ impl GearmanService {
         let senders_by_conn_id = self.senders_by_conn_id.clone();
         let mut fields = packet.data.clone();
         trace!("fields = {:?}", fields);
-        let fname = next_field(&mut fields).unwrap();
-        let unique = next_field(&mut fields).unwrap();
+        let fname = next_field(&mut fields);
+        let unique = next_field(&mut fields);
         trace!("  --> fname = {:?} unique = {:?}", fname, unique);
         let mut add = false;
         let handle = match queues.coalesce_unique(&unique, conn_id) {
@@ -332,7 +332,7 @@ impl GearmanService {
     fn handle_work_complete(&self, packet: &Packet) -> Result<Packet, io::Error> {
         // Search for handle
         let mut fields = packet.data.clone();
-        let handle = next_field(&mut fields).unwrap();
+        let handle = next_field(&mut fields);
         let worker = self.worker.clone();
         let queues = self.queues.clone();
         info!("Job is complete {:?}", handle);
@@ -359,7 +359,7 @@ impl GearmanService {
 
     fn handle_work_update(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let mut fields = packet.data.clone();
-        let handle = next_field(&mut fields).unwrap();
+        let handle = next_field(&mut fields);
         let job_waiters = self.job_waiters.lock().unwrap();
         if let Some(waiters) = job_waiters.get(&handle) {
             for conn_id in waiters.iter() {
