@@ -338,7 +338,7 @@ impl ClientHandler {
         Ok(no_response())
     }
 
-    fn handle_error(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_error(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
         /*
         if let Some(error_call) = self.error_call {
             error_call(req.data)
@@ -365,7 +365,7 @@ impl ClientHandler {
         Ok(no_response())
     }
 
-    fn handle_option_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_option_res(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
         /*
         if let Some(option_call) = self.option_call {
             option_call(req.data)
@@ -374,7 +374,7 @@ impl ClientHandler {
         Ok(no_response())
     }
 
-    fn handle_work_update(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_work_update(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
         /*
         if let Some(work_update_call) = self.work_update_call {
             work_update_call(req)

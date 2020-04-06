@@ -315,10 +315,10 @@ impl GearmanService {
         // If we don't store any senders, the sender will be dropped and the rx
         // stream should end thus releasing the waiter immediately.
         let psize = handle.len() as u32;
+        // Fetch our sender
+        let mut job_waiters = self.job_waiters.lock().unwrap();
+        let waiters = job_waiters.entry(handle.clone()).or_insert(Vec::new());
         if wait {
-            // Fetch our sender
-            let mut job_waiters = self.job_waiters.lock().unwrap();
-            let waiters = job_waiters.entry(handle.clone()).or_insert(Vec::new());
             waiters.push(self.conn_id);
         }
         Ok(Packet {
@@ -375,6 +375,34 @@ impl GearmanService {
         *client_id = d;
         Ok(no_response())
     }
+
+    fn handle_get_status(&self, packet: &Packet) -> Result<Packet, io::Error> {
+        let mut d = packet.data.clone();
+        let handle = next_field(&mut d);
+        let (known, _num_waiters) = match self.job_waiters.lock().unwrap().get(&handle) {
+            Some(waiters) => (1, waiters.len()),
+            None => (0, 0),
+        };
+        let worker = self.worker.clone();
+        let running = match worker.lock().unwrap().get_assigned_job(&handle) {
+            Some(_) => 1,
+            None => 0,
+        };
+        // TODO Need to intercept work updates for these
+        let numerator = 0;
+        let denominator = 0;
+        let mut data = BytesMut::with_capacity(handle.len() + 2 + 2 + 2 + 2); // handle + null+ known + null + running + null + num + null + denom
+        data.extend(&handle);
+        data.put_u8(b'\0');
+        data.extend(format!("{}", known).into_bytes());
+        data.put_u8(b'\0');
+        data.extend(format!("{}", running).into_bytes());
+        data.put_u8(b'\0');
+        data.extend(format!("{}", numerator).into_bytes());
+        data.put_u8(b'\0');
+        data.extend(format!("{}", denominator).into_bytes());
+        Ok(new_res(STATUS_RES, data.freeze()))
+    }
 }
 
 impl Service<Packet> for GearmanService {
@@ -398,6 +426,7 @@ impl Service<Packet> for GearmanService {
             SUBMIT_JOB_BG => self.handle_submit_job(PRIORITY_NORMAL, false, req),
             SUBMIT_JOB_HIGH_BG => self.handle_submit_job(PRIORITY_HIGH, false, req),
             SUBMIT_JOB_LOW_BG => self.handle_submit_job(PRIORITY_LOW, false, req),
+            GET_STATUS => self.handle_get_status(&req),
             PRE_SLEEP => self.handle_pre_sleep(),
             CAN_DO => self.handle_can_do(&req),
             CANT_DO => self.handle_cant_do(&req),
