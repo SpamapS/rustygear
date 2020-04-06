@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use bytes::{Bytes, BytesMut, BufMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use futures::Future;
@@ -133,7 +133,10 @@ impl Client {
                 let server: &str = self.servers.get(i).unwrap();
                 let addr = server.parse::<SocketAddr>()?;
                 trace!("really connecting: i={} addr={:?}", i, addr);
-                connects.push(runtime::Handle::current().spawn(async move { (i, TcpStream::connect(addr).await) }));
+                connects.push(
+                    runtime::Handle::current()
+                        .spawn(async move { (i, TcpStream::connect(addr).await) }),
+                );
             }
             i = i + 1;
         }
@@ -141,27 +144,39 @@ impl Client {
             let connect = connect.await?;
             let offset = connect.0;
             let conn = connect.1?;
-            trace!("connected: offset={} server={}", offset, self.servers[offset]);
+            trace!(
+                "connected: offset={} server={}",
+                offset,
+                self.servers[offset]
+            );
             let pc = PacketCodec {};
             let (mut sink, mut stream) = pc.framed(conn).split();
             let (tx, mut rx) = mpsc::channel(100); // XXX pick a good value or const
             let tx = tx.clone();
             let tx2 = tx.clone();
-            let handler = Arc::new(Mutex::new(ClientHandler::new(&self.client_id, self.echo_tx.clone(), tx2, self.job_created_tx.clone())));
+            let handler = Arc::new(Mutex::new(ClientHandler::new(
+                &self.client_id,
+                self.echo_tx.clone(),
+                tx2,
+                self.job_created_tx.clone(),
+            )));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
             let reader = async move {
                 let mut tx = tx.clone();
                 while let Some(frame) = stream.next().await {
+                    trace!("Frame read: {:?}", frame);
                     let response = {
                         let handler = handler.clone();
+                        debug!("Locking handler");
                         let mut handler = handler.lock().unwrap();
+                        debug!("Locked handler");
                         handler.call(frame.unwrap())
                     };
                     let response = response.await;
                     if let Err(e) = response {
                         error!("conn dropped?: {}", e);
-                        return
+                        return;
                     }
                     if let Err(_) = tx.send(response.unwrap()).await {
                         error!("receiver dropped")
@@ -206,38 +221,51 @@ impl Client {
         match conns.get_mut(0) {
             Some(conn) => {
                 let unique = format!("{}", Uuid::new_v4());
-                let mut data = BytesMut::with_capacity(
-                    2 + function.len() + unique.len() + payload.len()); // 2 for nulls
+                let mut data =
+                    BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
                 data.extend(function.bytes());
                 data.put_u8(b'\0');
                 data.extend(unique.bytes());
                 data.put_u8(b'\0');
                 data.extend(payload);
                 let packet = new_req(SUBMIT_JOB, data.freeze());
-                let mut conn = conn.lock().unwrap();
-                if let Err(e) = conn.sink_tx.send(packet).await {
-                    error!("Receiver dropped");
-                    Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)))
-                } else {
-                    if let Some(handle) = self.job_created_rx.recv().await {
-                        let (tx, rx) = mpsc::channel(100); // XXX lamer
-                        Ok(ClientJob { handle: handle, response_tx: tx, response_rx: rx })
-                    } else {
-                        Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
+                {
+                    let mut conn = conn.lock().unwrap();
+                    if let Err(e) = conn.sink_tx.send(packet).await {
+                        error!("Receiver dropped");
+                        return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
                     }
+                    /* Really important that conn be unlocked here to unblock res processing */
+                }
+                if let Some(handle) = self.job_created_rx.recv().await {
+                    let (tx, rx) = mpsc::channel(100); // XXX lamer
+                    Ok(ClientJob {
+                        handle: handle,
+                        response_tx: tx,
+                        response_rx: rx,
+                    })
+                } else {
+                    Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
                 }
             }
             None => {
                 error!("No connections on which to submit.");
-                Err(io::Error::new(io::ErrorKind::Other, "No Connections on which to submit"))
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No Connections on which to submit",
+                ))
             }
         }
     }
 }
 
 impl ClientHandler {
-
-    fn new(client_id: &Option<Bytes>, echo_tx: mpsc::Sender<Bytes>, sink_tx: mpsc::Sender<Packet>, job_created_tx: mpsc::Sender<Bytes>) -> ClientHandler {
+    fn new(
+        client_id: &Option<Bytes>,
+        echo_tx: mpsc::Sender<Bytes>,
+        sink_tx: mpsc::Sender<Packet>,
+        job_created_tx: mpsc::Sender<Bytes>,
+    ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
             echo_tx: echo_tx,
