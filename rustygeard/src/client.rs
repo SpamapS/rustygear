@@ -11,7 +11,7 @@ use futures::stream::StreamExt;
 use futures::Future;
 use tokio::net::TcpStream;
 use tokio::runtime;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{channel, Sender, Receiver};
 use tokio_util::codec::Decoder;
 
 use tower_service::Service;
@@ -28,23 +28,23 @@ pub struct Client {
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
     connected: Vec<bool>,
     client_id: Option<Bytes>,
-    echo_tx: mpsc::Sender<Bytes>,
-    echo_rx: mpsc::Receiver<Bytes>,
-    job_created_tx: mpsc::Sender<Bytes>,
-    job_created_rx: mpsc::Receiver<Bytes>,
+    echo_tx: Sender<Bytes>,
+    echo_rx: Receiver<Bytes>,
+    job_created_tx: Sender<Bytes>,
+    job_created_rx: Receiver<Bytes>,
 }
 
 struct ClientHandler {
     client_id: Option<Bytes>,
-    sink_tx: mpsc::Sender<Packet>,
-    echo_tx: mpsc::Sender<Bytes>,
-    job_created_tx: mpsc::Sender<Bytes>,
+    sink_tx: Sender<Packet>,
+    echo_tx: Sender<Bytes>,
+    job_created_tx: Sender<Bytes>,
 }
 
 pub struct ClientJob {
     handle: Bytes,
-    response_tx: mpsc::Sender<Bytes>,
-    response_rx: mpsc::Receiver<Bytes>,
+    response_tx: Sender<Bytes>,
+    response_rx: Receiver<Bytes>,
 }
 
 impl ClientJob {
@@ -98,8 +98,8 @@ impl Service<Packet> for ClientHandler {
 
 impl Client {
     pub fn new() -> Client {
-        let (tx, rx) = mpsc::channel(100); // XXX this is lame
-        let (txj, rxj) = mpsc::channel(100); // XXX this is lame
+        let (tx, rx) = channel(100); // XXX this is lame
+        let (txj, rxj) = channel(100); // XXX this is lame
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
@@ -151,7 +151,7 @@ impl Client {
             );
             let pc = PacketCodec {};
             let (mut sink, mut stream) = pc.framed(conn).split();
-            let (tx, mut rx) = mpsc::channel(100); // XXX pick a good value or const
+            let (tx, mut rx) = channel(100); // XXX pick a good value or const
             let tx = tx.clone();
             let tx2 = tx.clone();
             let handler = Arc::new(Mutex::new(ClientHandler::new(
@@ -238,7 +238,7 @@ impl Client {
                     /* Really important that conn be unlocked here to unblock res processing */
                 }
                 if let Some(handle) = self.job_created_rx.recv().await {
-                    let (tx, rx) = mpsc::channel(100); // XXX lamer
+                    let (tx, rx) = channel(100); // XXX lamer
                     Ok(ClientJob {
                         handle: handle,
                         response_tx: tx,
@@ -262,9 +262,9 @@ impl Client {
 impl ClientHandler {
     fn new(
         client_id: &Option<Bytes>,
-        echo_tx: mpsc::Sender<Bytes>,
-        sink_tx: mpsc::Sender<Packet>,
-        job_created_tx: mpsc::Sender<Bytes>,
+        echo_tx: Sender<Bytes>,
+        sink_tx: Sender<Packet>,
+        job_created_tx: Sender<Bytes>,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
