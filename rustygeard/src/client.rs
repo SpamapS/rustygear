@@ -48,6 +48,8 @@ pub struct Client {
     job_created_rx: Receiver<Bytes>,
     status_res_tx: Sender<JobStatus>,
     status_res_rx: Receiver<JobStatus>,
+    error_tx: Sender<(Bytes, Bytes)>,
+    error_rx: Receiver<(Bytes, Bytes)>,
 }
 
 struct ClientHandler {
@@ -57,6 +59,7 @@ struct ClientHandler {
     echo_tx: Sender<Bytes>,
     job_created_tx: Sender<Bytes>,
     status_res_tx: Sender<JobStatus>,
+    error_tx: Sender<(Bytes, Bytes)>,
 }
 
 pub struct ClientJob {
@@ -128,6 +131,7 @@ impl Client {
         let (tx, rx) = channel(100); // XXX this is lame
         let (txj, rxj) = channel(100); // XXX this is lame
         let (txs, rxs) = channel(100); // XXX this is lame
+        let (txe, rxe) = channel(100); // XXX this is lame
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
@@ -140,6 +144,8 @@ impl Client {
             job_created_rx: rxj,
             status_res_tx: txs,
             status_res_rx: rxs,
+            error_tx: txe,
+            error_rx: rxe,
         }
     }
 
@@ -192,6 +198,7 @@ impl Client {
                 tx2,
                 self.job_created_tx.clone(),
                 self.status_res_tx.clone(),
+                self.error_tx.clone(),
             )));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
@@ -319,6 +326,10 @@ impl Client {
             Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
         }
     }
+
+    pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
+        Ok(self.error_rx.recv().await)
+    }
 }
 
 impl ClientHandler {
@@ -329,6 +340,7 @@ impl ClientHandler {
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
         status_res_tx: Sender<JobStatus>,
+        error_tx: Sender<(Bytes, Bytes)>
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
@@ -337,6 +349,7 @@ impl ClientHandler {
             sink_tx: sink_tx,
             job_created_tx: job_created_tx,
             status_res_tx: status_res_tx,
+            error_tx: error_tx,
         }
     }
 
@@ -356,12 +369,12 @@ impl ClientHandler {
         Ok(no_response())
     }
 
-    fn handle_error(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
-        /*
-        if let Some(error_call) = self.error_call {
-            error_call(req.data)
-        }
-        */
+    fn handle_error(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+        let mut data = req.data.clone();
+        let code = next_field(&mut data);
+        let text = next_field(&mut data);
+        let mut tx = self.error_tx.clone();
+        runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
         Ok(no_response())
     }
 
