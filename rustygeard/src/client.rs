@@ -4,6 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
@@ -34,11 +35,13 @@ pub struct JobStatus{
     waiting: u32,
 }
 
+
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
     connected: Vec<bool>,
     client_id: Option<Bytes>,
+    senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
     echo_tx: Sender<Bytes>,
     echo_rx: Receiver<Bytes>,
     job_created_tx: Sender<Bytes>,
@@ -49,6 +52,7 @@ pub struct Client {
 
 struct ClientHandler {
     client_id: Option<Bytes>,
+    senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
     sink_tx: Sender<Packet>,
     echo_tx: Sender<Bytes>,
     job_created_tx: Sender<Bytes>,
@@ -57,15 +61,24 @@ struct ClientHandler {
 
 pub struct ClientJob {
     handle: Bytes,
-    response_tx: Sender<Bytes>,
-    response_rx: Receiver<Bytes>,
+    response_rx: Receiver<WorkUpdate>,
+}
+
+#[derive(Debug)]
+pub enum WorkUpdate {
+    Complete { handle: Bytes, payload: Bytes },
+    Data { handle: Bytes, payload: Bytes },
+    Warning { handle: Bytes, payload: Bytes },
+    Exception { handle: Bytes, payload: Bytes },
+    Status { handle: Bytes, numerator: usize, denominator: usize },
+    Fail (Bytes),
 }
 
 impl ClientJob {
     pub fn handle(&self) -> &Bytes {
         &self.handle
     }
-    pub async fn response(&mut self) -> Result<Bytes, io::Error> {
+    pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
     }
 }
@@ -92,7 +105,7 @@ impl Service<Packet> for ClientHandler {
             ERROR => self.handle_error(&req),
             STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
             OPTION_RES => self.handle_option_res(&req),
-            WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
+            WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
                 self.handle_work_update(&req)
             }
             //JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
@@ -120,6 +133,7 @@ impl Client {
             conns: Arc::new(Mutex::new(Vec::new())),
             connected: Vec::new(),
             client_id: None,
+            senders_by_handle: Arc::new(Mutex::new(HashMap::new())),
             echo_tx: tx,
             echo_rx: rx,
             job_created_tx: txj,
@@ -173,6 +187,7 @@ impl Client {
             let tx2 = tx.clone();
             let handler = Arc::new(Mutex::new(ClientHandler::new(
                 &self.client_id,
+                self.senders_by_handle.clone(),
                 self.echo_tx.clone(),
                 tx2,
                 self.job_created_tx.clone(),
@@ -265,9 +280,10 @@ impl Client {
                 }
                 if let Some(handle) = self.job_created_rx.recv().await {
                     let (tx, rx) = channel(100); // XXX lamer
+                    let mut response_by_handle = self.senders_by_handle.lock().unwrap();
+                    response_by_handle.insert(handle.clone(), tx.clone());
                     Ok(ClientJob {
                         handle: handle,
-                        response_tx: tx,
                         response_rx: rx,
                     })
                 } else {
@@ -308,6 +324,7 @@ impl Client {
 impl ClientHandler {
     fn new(
         client_id: &Option<Bytes>,
+        senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
         echo_tx: Sender<Bytes>,
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
@@ -315,6 +332,7 @@ impl ClientHandler {
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
+            senders_by_handle: senders_by_handle,
             echo_tx: echo_tx,
             sink_tx: sink_tx,
             job_created_tx: job_created_tx,
@@ -374,12 +392,33 @@ impl ClientHandler {
         Ok(no_response())
     }
 
-    fn handle_work_update(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
-        /*
-        if let Some(work_update_call) = self.work_update_call {
-            work_update_call(req)
-        }
-        */
+    fn handle_work_update(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+        let mut data = req.data.clone();
+        let handle = next_field(&mut data);
+        let payload = next_field(&mut data);
+        let work_update = {
+            let handle = handle.clone();
+            match req.ptype {
+                WORK_DATA => WorkUpdate::Data {handle: handle, payload: payload},
+                WORK_COMPLETE => WorkUpdate::Complete {handle: handle, payload: payload},
+                WORK_WARNING => WorkUpdate::Warning {handle: handle, payload: payload},
+                WORK_EXCEPTION => WorkUpdate::Exception {handle: handle, payload: payload},
+                WORK_FAIL => WorkUpdate::Fail(handle),
+                WORK_STATUS => {
+                    let numerator: usize = String::from_utf8((&payload).to_vec()).unwrap().parse().unwrap();
+                    let denominator: usize = String::from_utf8(next_field(&mut data).to_vec()).unwrap().parse().unwrap();
+                    WorkUpdate::Status {handle: handle, numerator: numerator, denominator: denominator}
+                },
+                _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
+            }
+        };
+        let senders_by_handle = self.senders_by_handle.lock().unwrap();
+        if let Some(tx) = senders_by_handle.get(&handle) {
+            let mut tx = tx.clone();
+            runtime::Handle::current().spawn(async move { tx.send(work_update).await });
+        } else {
+            error!("Received work for unknown job: {:?}", handle);
+        };
         Ok(no_response())
     }
 }
