@@ -1,5 +1,3 @@
-use core::task::{Context, Poll};
-
 use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -15,7 +13,6 @@ use tokio::runtime;
 use tokio::sync::mpsc::{channel, Sender, Receiver};
 use tokio_util::codec::Decoder;
 
-use tower_service::Service;
 use uuid::Uuid;
 
 use crate::service::{new_req, next_field, no_response};
@@ -83,46 +80,6 @@ impl ClientJob {
     }
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
-    }
-}
-
-impl Service<Packet> for ClientHandler {
-    type Response = Packet;
-    type Error = io::Error;
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        /* XXX: This should implement backpressure */
-        trace!("cx = {:?}", cx);
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Packet) -> Self::Future {
-        debug!("[{:?}] Got a req {:?}", self.client_id, req);
-        let res = match req.ptype {
-            //NOOP => self.handle_noop(),
-            JOB_CREATED => self.handle_job_created(&req),
-            //NO_JOB => self.handle_no_job(&req),
-            //JOB_ASSIGN => self.handle_job_assign(&req),
-            ECHO_RES => self.handle_echo_res(&req),
-            ERROR => self.handle_error(&req),
-            STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
-            OPTION_RES => self.handle_option_res(&req),
-            WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
-                self.handle_work_update(&req)
-            }
-            //JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
-            //JOB_ASSIGN_ALL => self.handle_job_assign_all(&req),
-            _ => {
-                error!("Unimplemented: {:?} processing packet", req);
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Invalid packet type {}", req.ptype),
-                ))
-            }
-        };
-        let fut = async { res };
-        Box::pin(fut)
     }
 }
 
@@ -351,6 +308,34 @@ impl ClientHandler {
             status_res_tx: status_res_tx,
             error_tx: error_tx,
         }
+    }
+
+    fn call(&mut self, req: Packet) -> Pin<Box<dyn Future<Output = Result<Packet, io::Error>> + Send>> {
+        debug!("[{:?}] Got a req {:?}", self.client_id, req);
+        let res = match req.ptype {
+            //NOOP => self.handle_noop(),
+            JOB_CREATED => self.handle_job_created(&req),
+            //NO_JOB => self.handle_no_job(&req),
+            //JOB_ASSIGN => self.handle_job_assign(&req),
+            ECHO_RES => self.handle_echo_res(&req),
+            ERROR => self.handle_error(&req),
+            STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
+            OPTION_RES => self.handle_option_res(&req),
+            WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
+                self.handle_work_update(&req)
+            }
+            //JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
+            //JOB_ASSIGN_ALL => self.handle_job_assign_all(&req),
+            _ => {
+                error!("Unimplemented: {:?} processing packet", req);
+                Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("Invalid packet type {}", req.ptype),
+                ))
+            }
+        };
+        let fut = async { res };
+        Box::pin(fut)
     }
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
