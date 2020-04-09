@@ -1,13 +1,11 @@
 use std::io;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use futures::Future;
 use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::{channel, Sender, Receiver};
@@ -170,7 +168,6 @@ impl Client {
                         debug!("Locked handler");
                         handler.call(frame.unwrap())
                     };
-                    let response = response.await;
                     if let Err(e) = response {
                         error!("conn dropped?: {}", e);
                         return;
@@ -198,12 +195,14 @@ impl Client {
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let payload = payload.clone();
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
-        if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
-            let mut conn = conn.lock().unwrap();
-            if let Err(_) = conn.sink_tx.send(packet).await {
-                error!("Receiver dropped")
+        let conn: Arc<Mutex<ClientHandler>> = {
+            if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
+                conn.clone()
+            } else {
+                return Err(io::Error::new(io::ErrorKind::Other, "No connections for echo!"))
             }
-        }
+        };
+        self.send_packet(conn, packet).await?;
         debug!("Waiting for echo response");
         match self.echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
@@ -221,67 +220,65 @@ impl Client {
     }
 
     async fn direct_submit(&mut self, ptype: u32, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
-        let mut conns = self.conns.lock().unwrap();
+        let conn = {
+            let mut conns = self.conns.lock().unwrap();
+            if let Some(conn) = conns.get_mut(0) {
+                conn.clone()
+            } else {
+                return Err(io::Error::new(io::ErrorKind::Other, "No connections for submitting jobs."))
+            }
+        };
         /* Pick the conn later */
-        match conns.get_mut(0) {
-            Some(conn) => {
-                let unique = format!("{}", Uuid::new_v4());
-                let mut data =
-                    BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
-                data.extend(function.bytes());
-                data.put_u8(b'\0');
-                data.extend(unique.bytes());
-                data.put_u8(b'\0');
-                data.extend(payload);
-                let packet = new_req(ptype, data.freeze());
-                {
-                    let mut conn = conn.lock().unwrap();
-                    if let Err(e) = conn.sink_tx.send(packet).await {
-                        error!("Receiver dropped");
-                        return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
-                    }
-                    /* Really important that conn be unlocked here to unblock res processing */
-                }
-                if let Some(handle) = self.job_created_rx.recv().await {
-                    let (tx, rx) = channel(100); // XXX lamer
-                    let mut response_by_handle = self.senders_by_handle.lock().unwrap();
-                    response_by_handle.insert(handle.clone(), tx.clone());
-                    Ok(ClientJob {
-                        handle: handle,
-                        response_rx: rx,
-                    })
-                } else {
-                    Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
-                }
-            }
-            None => {
-                error!("No connections on which to submit.");
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No Connections on which to submit",
-                ))
-            }
+        let conn = conn.clone();
+        let unique = format!("{}", Uuid::new_v4());
+        let mut data =
+            BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
+        data.extend(function.bytes());
+        data.put_u8(b'\0');
+        data.extend(unique.bytes());
+        data.put_u8(b'\0');
+        data.extend(payload);
+        let packet = new_req(ptype, data.freeze());
+        {
+            self.send_packet(conn, packet).await?;
+            /* Really important that conn be unlocked here to unblock res processing */
+        }
+        if let Some(handle) = self.job_created_rx.recv().await {
+            let (tx, rx) = channel(100); // XXX lamer
+            let mut response_by_handle = self.senders_by_handle.lock().unwrap();
+            response_by_handle.insert(handle.clone(), tx.clone());
+            Ok(ClientJob {
+                handle: handle,
+                response_rx: rx,
+            })
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
         }
     }
 
     pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
-        let mut conns = self.conns.lock().unwrap();
-        let conn = conns.get_mut(0).unwrap();
+        let conn: Arc<Mutex<ClientHandler>> = {
+            let mut conns = self.conns.lock().unwrap();
+            conns.get_mut(0).unwrap().clone()
+        };
         let mut payload = BytesMut::with_capacity(handle.len());
         payload.extend(handle);
         let status_req = new_req(GET_STATUS, payload.freeze());
-        {
-            let mut conn = conn.lock().unwrap();
-            if let Err(e) = conn.sink_tx.send(status_req).await {
-                error!("Receiver dropped");
-                return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
-            }
-        }
+        self.send_packet(conn, status_req).await?;
         if let Some(status_res) = self.status_res_rx.recv().await {
             Ok(status_res)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
         }
+    }
+
+    async fn send_packet(&mut self, conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<(), io::Error> {
+        let mut conn = conn.lock().unwrap();
+        if let Err(e) = conn.sink_tx.send(packet).await {
+            error!("Receiver dropped");
+            return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
+        }
+        Ok(())
     }
 
     pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
@@ -310,9 +307,9 @@ impl ClientHandler {
         }
     }
 
-    fn call(&mut self, req: Packet) -> Pin<Box<dyn Future<Output = Result<Packet, io::Error>> + Send>> {
+    fn call(&mut self, req: Packet) -> Result<Packet, io::Error> {
         debug!("[{:?}] Got a req {:?}", self.client_id, req);
-        let res = match req.ptype {
+        match req.ptype {
             //NOOP => self.handle_noop(),
             JOB_CREATED => self.handle_job_created(&req),
             //NO_JOB => self.handle_no_job(&req),
@@ -333,9 +330,7 @@ impl ClientHandler {
                     format!("Invalid packet type {}", req.ptype),
                 ))
             }
-        };
-        let fut = async { res };
-        Box::pin(fut)
+        }
     }
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
