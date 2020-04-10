@@ -1,14 +1,14 @@
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use tokio::net::TcpStream;
 use tokio::runtime;
-use tokio::sync::mpsc::{channel, Sender, Receiver};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
@@ -21,7 +21,7 @@ use rustygear::constants::*;
 type Hostname = String;
 
 #[derive(Debug)]
-pub struct JobStatus{
+pub struct JobStatus {
     handle: Bytes,
     known: bool,
     running: bool,
@@ -30,7 +30,7 @@ pub struct JobStatus{
     waiting: u32,
 }
 
-
+/// Client for submitting and tracking jobs
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
@@ -57,25 +57,45 @@ struct ClientHandler {
     error_tx: Sender<(Bytes, Bytes)>,
 }
 
+/// Return object for submit_ functions.
 pub struct ClientJob {
     handle: Bytes,
     response_rx: Receiver<WorkUpdate>,
 }
 
 #[derive(Debug)]
+/// Logical representation of the data workers may send back to clients
 pub enum WorkUpdate {
-    Complete { handle: Bytes, payload: Bytes },
-    Data { handle: Bytes, payload: Bytes },
-    Warning { handle: Bytes, payload: Bytes },
-    Exception { handle: Bytes, payload: Bytes },
-    Status { handle: Bytes, numerator: usize, denominator: usize },
-    Fail (Bytes),
+    Complete {
+        handle: Bytes,
+        payload: Bytes,
+    },
+    Data {
+        handle: Bytes,
+        payload: Bytes,
+    },
+    Warning {
+        handle: Bytes,
+        payload: Bytes,
+    },
+    Exception {
+        handle: Bytes,
+        payload: Bytes,
+    },
+    Status {
+        handle: Bytes,
+        numerator: usize,
+        denominator: usize,
+    },
+    Fail(Bytes),
 }
 
 impl ClientJob {
+    /// returns the job handle
     pub fn handle(&self) -> &Bytes {
         &self.handle
     }
+    /// Should only return when the worker has sent data or completed the job. Errors if used on background jobs.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
     }
@@ -104,17 +124,20 @@ impl Client {
         }
     }
 
+    /// Add a server to the client. This does not initiate anything, it just configures the client.
     pub fn add_server(mut self, server: &str) -> Self {
         self.servers.push(Hostname::from(server));
         self.connected.push(false);
         self
     }
 
+    /// Configures the client ID for this client
     pub fn set_client_id(mut self, client_id: &'static str) -> Self {
         self.client_id = Some(Bytes::from(client_id));
         self
     }
 
+    /// Attempts to connect to all servers
     pub async fn connect(mut self) -> Result<Self, Box<dyn std::error::Error>> {
         /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
@@ -192,6 +215,9 @@ impl Client {
         Ok(self)
     }
 
+    /// Sends an ECHO_REQ to the server, a good way to confirm the connection is alive
+    ///
+    /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let payload = payload.clone();
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
@@ -199,7 +225,10 @@ impl Client {
             if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
                 conn.clone()
             } else {
-                return Err(io::Error::new(io::ErrorKind::Other, "No connections for echo!"))
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No connections for echo!",
+                ));
             }
         };
         self.send_packet(conn, packet).await?;
@@ -211,28 +240,43 @@ impl Client {
         Ok(())
     }
 
+    /// Submits a foreground job. The see [ClientJob.response] for how to see the response from the
+    /// worker.
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
         self.direct_submit(SUBMIT_JOB, function, payload).await
     }
 
-    pub async fn submit_background(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
+    /// Submits a background job. The [ClientJob] returned won't be able to use the
+    /// [ClientJob.response] method because the server will never send packets for it.
+    pub async fn submit_background(
+        &mut self,
+        function: &str,
+        payload: &[u8],
+    ) -> Result<ClientJob, io::Error> {
         self.direct_submit(SUBMIT_JOB_BG, function, payload).await
     }
 
-    async fn direct_submit(&mut self, ptype: u32, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
+    async fn direct_submit(
+        &mut self,
+        ptype: u32,
+        function: &str,
+        payload: &[u8],
+    ) -> Result<ClientJob, io::Error> {
         let conn = {
             let mut conns = self.conns.lock().unwrap();
             if let Some(conn) = conns.get_mut(0) {
                 conn.clone()
             } else {
-                return Err(io::Error::new(io::ErrorKind::Other, "No connections for submitting jobs."))
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No connections for submitting jobs.",
+                ));
             }
         };
         /* Pick the conn later */
         let conn = conn.clone();
         let unique = format!("{}", Uuid::new_v4());
-        let mut data =
-            BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
+        let mut data = BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
         data.extend(function.bytes());
         data.put_u8(b'\0');
         data.extend(unique.bytes());
@@ -256,6 +300,7 @@ impl Client {
         }
     }
 
+    /// Sends a GET_STATUS packet and then returns the STATUS_RES in a [JobStatus]
     pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
         let conn: Arc<Mutex<ClientHandler>> = {
             let mut conns = self.conns.lock().unwrap();
@@ -272,7 +317,11 @@ impl Client {
         }
     }
 
-    async fn send_packet(&mut self, conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<(), io::Error> {
+    async fn send_packet(
+        &mut self,
+        conn: Arc<Mutex<ClientHandler>>,
+        packet: Packet,
+    ) -> Result<(), io::Error> {
         let mut conn = conn.lock().unwrap();
         if let Err(e) = conn.sink_tx.send(packet).await {
             error!("Receiver dropped");
@@ -281,6 +330,8 @@ impl Client {
         Ok(())
     }
 
+    /// Gets a single error that might have come from the server. The tuple returned is (code,
+    /// message)
     pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
         Ok(self.error_rx.recv().await)
     }
@@ -294,7 +345,7 @@ impl ClientHandler {
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
         status_res_tx: Sender<JobStatus>,
-        error_tx: Sender<(Bytes, Bytes)>
+        error_tx: Sender<(Bytes, Bytes)>,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
@@ -364,12 +415,21 @@ impl ClientHandler {
             handle: next_field(&mut req.data),
             known: bytes2bool(&next_field(&mut req.data)),
             running: bytes2bool(&next_field(&mut req.data)),
-            numerator: String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap(), // XXX we can do better
-            denominator: String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap(),
+            numerator: String::from_utf8(next_field(&mut req.data).to_vec())
+                .unwrap()
+                .parse()
+                .unwrap(), // XXX we can do better
+            denominator: String::from_utf8(next_field(&mut req.data).to_vec())
+                .unwrap()
+                .parse()
+                .unwrap(),
             waiting: 0,
         };
         if req.ptype == STATUS_RES_UNIQUE {
-            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec()).unwrap().parse().unwrap();
+            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec())
+                .unwrap()
+                .parse()
+                .unwrap();
         }
         let mut tx = self.status_res_tx.clone();
         runtime::Handle::current().spawn(async move { tx.send(js).await });
@@ -392,16 +452,38 @@ impl ClientHandler {
         let work_update = {
             let handle = handle.clone();
             match req.ptype {
-                WORK_DATA => WorkUpdate::Data {handle: handle, payload: payload},
-                WORK_COMPLETE => WorkUpdate::Complete {handle: handle, payload: payload},
-                WORK_WARNING => WorkUpdate::Warning {handle: handle, payload: payload},
-                WORK_EXCEPTION => WorkUpdate::Exception {handle: handle, payload: payload},
+                WORK_DATA => WorkUpdate::Data {
+                    handle: handle,
+                    payload: payload,
+                },
+                WORK_COMPLETE => WorkUpdate::Complete {
+                    handle: handle,
+                    payload: payload,
+                },
+                WORK_WARNING => WorkUpdate::Warning {
+                    handle: handle,
+                    payload: payload,
+                },
+                WORK_EXCEPTION => WorkUpdate::Exception {
+                    handle: handle,
+                    payload: payload,
+                },
                 WORK_FAIL => WorkUpdate::Fail(handle),
                 WORK_STATUS => {
-                    let numerator: usize = String::from_utf8((&payload).to_vec()).unwrap().parse().unwrap();
-                    let denominator: usize = String::from_utf8(next_field(&mut data).to_vec()).unwrap().parse().unwrap();
-                    WorkUpdate::Status {handle: handle, numerator: numerator, denominator: denominator}
-                },
+                    let numerator: usize = String::from_utf8((&payload).to_vec())
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    let denominator: usize = String::from_utf8(next_field(&mut data).to_vec())
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    WorkUpdate::Status {
+                        handle: handle,
+                        numerator: numerator,
+                        denominator: denominator,
+                    }
+                }
                 _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
             }
         };
