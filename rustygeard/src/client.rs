@@ -13,7 +13,7 @@ use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
 
-use crate::service::{new_req, next_field, no_response};
+use crate::service::{new_req, new_res, next_field, no_response};
 use crate::util::bytes2bool;
 use rustygear::codec::{Packet, PacketCodec};
 use rustygear::constants::*;
@@ -25,8 +25,8 @@ pub struct JobStatus {
     handle: Bytes,
     known: bool,
     running: bool,
-    numerator: u8,
-    denominator: u8,
+    numerator: u32,
+    denominator: u32,
     waiting: u32,
 }
 
@@ -37,6 +37,7 @@ pub struct Client {
     connected: Vec<bool>,
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
+    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
     echo_tx: Sender<Bytes>,
     echo_rx: Receiver<Bytes>,
     job_created_tx: Sender<Bytes>,
@@ -50,6 +51,7 @@ pub struct Client {
 struct ClientHandler {
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
+    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
     sink_tx: Sender<Packet>,
     echo_tx: Sender<Bytes>,
     job_created_tx: Sender<Bytes>,
@@ -61,6 +63,7 @@ struct ClientHandler {
 pub struct ClientJob {
     handle: Bytes,
     response_rx: Receiver<WorkUpdate>,
+    conn: Option<Arc<Mutex<ClientHandler>>>,
 }
 
 #[derive(Debug)]
@@ -90,7 +93,31 @@ pub enum WorkUpdate {
     Fail(Bytes),
 }
 
+async fn send_packet(
+    conn: Arc<Mutex<ClientHandler>>,
+    packet: Packet,
+) -> Result<(), io::Error> {
+    let mut sink_tx = conn.lock().unwrap().sink_tx.clone();
+    if let Err(e) = sink_tx.send(packet).await {
+        error!("Receiver dropped");
+        return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
+    }
+    Ok(())
+}
+
 impl ClientJob {
+    fn new(
+        handle: Bytes,
+        response_rx: Receiver<WorkUpdate>,
+        conn: Option<Arc<Mutex<ClientHandler>>>,
+    ) -> ClientJob {
+        ClientJob {
+            handle: handle,
+            response_rx: response_rx,
+            conn: conn,
+        }
+    }
+
     /// returns the job handle
     pub fn handle(&self) -> &Bytes {
         &self.handle
@@ -98,6 +125,37 @@ impl ClientJob {
     /// Should only return when the worker has sent data or completed the job. Errors if used on background jobs.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
+    }
+
+    async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
+        if let Some(conn) = &self.conn {
+            send_packet(conn.clone(), packet).await
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "No connection on which to send WORK_FAIL",
+            ))
+        }
+    }
+
+    /// Sends a WORK_FAIL
+    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
+        let packet = new_res(WORK_FAIL, self.handle.clone());
+        self.send_packet(packet).await
+    }
+
+    /// Sends a WORK_STATUS
+    pub async fn work_status(&mut self, numerator: u32, denominator: u32) -> Result<(), io::Error> {
+        let numerator = format!("{}", numerator);
+        let denominator = format!("{}", denominator);
+        let mut payload = BytesMut::with_capacity(2 + self.handle.len() + numerator.as_bytes().len() + denominator.as_bytes().len());
+        payload.extend(self.handle.clone());
+        payload.put_u8(b'\0');
+        payload.extend(numerator.as_bytes());
+        payload.put_u8(b'\0');
+        payload.extend(denominator.as_bytes());
+        let packet = new_res(WORK_STATUS, payload.freeze());
+        self.send_packet(packet).await
     }
 }
 
@@ -113,6 +171,7 @@ impl Client {
             connected: Vec::new(),
             client_id: None,
             senders_by_handle: Arc::new(Mutex::new(HashMap::new())),
+            jobs_tx_by_func: Arc::new(Mutex::new(HashMap::new())),
             echo_tx: tx,
             echo_rx: rx,
             job_created_tx: txj,
@@ -172,6 +231,7 @@ impl Client {
             let handler = Arc::new(Mutex::new(ClientHandler::new(
                 &self.client_id,
                 self.senders_by_handle.clone(),
+                self.jobs_tx_by_func.clone(),
                 self.echo_tx.clone(),
                 tx2,
                 self.job_created_tx.clone(),
@@ -231,7 +291,7 @@ impl Client {
                 ));
             }
         };
-        self.send_packet(conn, packet).await?;
+        send_packet(conn, packet).await?;
         debug!("Waiting for echo response");
         match self.echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
@@ -284,17 +344,15 @@ impl Client {
         data.extend(payload);
         let packet = new_req(ptype, data.freeze());
         {
-            self.send_packet(conn, packet).await?;
+            let conn = conn.clone();
+            send_packet(conn, packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
         if let Some(handle) = self.job_created_rx.recv().await {
             let (tx, rx) = channel(100); // XXX lamer
             let mut response_by_handle = self.senders_by_handle.lock().unwrap();
             response_by_handle.insert(handle.clone(), tx.clone());
-            Ok(ClientJob {
-                handle: handle,
-                response_rx: rx,
-            })
+            Ok(ClientJob::new(handle, rx, Some(conn.clone())))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
         }
@@ -309,7 +367,7 @@ impl Client {
         let mut payload = BytesMut::with_capacity(handle.len());
         payload.extend(handle);
         let status_req = new_req(GET_STATUS, payload.freeze());
-        self.send_packet(conn, status_req).await?;
+        send_packet(conn, status_req).await?;
         if let Some(status_res) = self.status_res_rx.recv().await {
             Ok(status_res)
         } else {
@@ -317,17 +375,47 @@ impl Client {
         }
     }
 
-    async fn send_packet(
-        &mut self,
-        conn: Arc<Mutex<ClientHandler>>,
-        packet: Packet,
-    ) -> Result<(), io::Error> {
-        let mut conn = conn.lock().unwrap();
-        if let Err(e) = conn.sink_tx.send(packet).await {
-            error!("Receiver dropped");
-            return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
+    /// Sends a CAN_DO and registers a callback for it
+    pub async fn can_do<F>(self, function: &str, mut func: F) -> Result<Self, io::Error>
+    where
+        F: FnMut(&mut ClientJob) -> Result<(), io::Error> + Send + 'static,
+    {
+        let conn: Arc<Mutex<ClientHandler>> = {
+            let mut conns = self.conns.lock().unwrap();
+            conns.get_mut(0).unwrap().clone()
+        };
+        let (tx, mut rx) = channel(100); // Some day we'll use this param right
+        {
+            let conn = conn.lock().unwrap();
+            let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
+            {
+                let mut k = Vec::with_capacity(function.len());
+                k.clone_from_slice(function.as_bytes());
+                if let Some(_) = jobs_tx_by_func.get(&k) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("function {} already registered.", function),
+                    ));
+                }
+            }
+            let mut k = Vec::with_capacity(function.len());
+            k.clone_from_slice(function.as_bytes());
+            jobs_tx_by_func.insert(k, tx.clone());
         }
-        Ok(())
+        let mut payload = BytesMut::with_capacity(function.len());
+        payload.extend(function.bytes());
+        let can_do = new_req(CAN_DO, payload.freeze());
+        send_packet(conn, can_do).await?;
+        //let rx = Arc::new(Mutex::new(rx));
+        runtime::Handle::current().spawn(async move {
+            //let rx = rx.lock().unwrap();
+            while let Some(mut job) = rx.recv().await {
+                if let Err(_) = func(&mut job) {
+                    job.work_fail().await.unwrap();
+                }
+            }
+        });
+        Ok(self)
     }
 
     /// Gets a single error that might have come from the server. The tuple returned is (code,
@@ -341,6 +429,7 @@ impl ClientHandler {
     fn new(
         client_id: &Option<Bytes>,
         senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
+        jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
         echo_tx: Sender<Bytes>,
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
@@ -350,6 +439,7 @@ impl ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
             senders_by_handle: senders_by_handle,
+            jobs_tx_by_func: jobs_tx_by_func,
             echo_tx: echo_tx,
             sink_tx: sink_tx,
             job_created_tx: job_created_tx,

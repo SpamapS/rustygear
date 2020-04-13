@@ -3,18 +3,20 @@ use std::thread;
 
 use tokio::prelude::*;
 
-use rustygeard::client::{Worker, WorkerJob};
+use rustygeard::client::{Client, ClientJob};
 
 /// When we use the status method, we need to be async!
-async fn status_user(job: WorkerJob) -> Result<(), io::Error> {
-    job.status(50, 100).await;
+async fn status_user(job: ClientJob) -> Result<Vec<u8>, io::Error> {
+    job.work_status(50, 100).await;
     thread::sleep(Duration::from_secs(1));
-    Ok("all done")
+    let rs = Vec::new();
+    rs.extend_from_slice("all done".as_bytes());
+    Ok(rs)
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut worker = Worker::new();
+    let mut worker = Client::new();
     worker
         .connect()
         .await?
