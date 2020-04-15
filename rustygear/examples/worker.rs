@@ -3,7 +3,7 @@ use std::thread;
 
 use tokio::prelude::*;
 
-use rustygeard::client::{Client, ClientJob};
+use rustygear::client::{Client, ClientJob};
 
 /// When we use the status method, we need to be async!
 async fn status_user(mut job: ClientJob) -> Result<Vec<u8>, io::Error> {

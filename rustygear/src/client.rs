@@ -14,10 +14,9 @@ use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
 
-use crate::service::{new_req, new_res, next_field, no_response};
-use crate::util::bytes2bool;
-use rustygear::codec::{Packet, PacketCodec};
-use rustygear::constants::*;
+use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
+use crate::codec::{Packet, PacketCodec};
+use crate::constants::*;
 
 type Hostname = String;
 

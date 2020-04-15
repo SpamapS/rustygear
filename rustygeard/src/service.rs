@@ -12,33 +12,16 @@ use tokio::runtime;
 use tokio::sync::mpsc::Sender;
 use tower_service::Service;
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use rustygear::codec::{Packet, PacketMagic};
 use rustygear::constants::*;
 use rustygear::job::Job;
+use rustygear::util::{new_res, next_field, no_response};
 
 use crate::admin;
 use crate::queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
 use crate::worker::{SharedWorkers, Wake, Worker};
-
-pub fn new_res(ptype: u32, data: Bytes) -> Packet {
-    Packet {
-        magic: PacketMagic::RES,
-        ptype: ptype,
-        psize: data.len() as u32,
-        data: data,
-    }
-}
-
-pub fn new_req(ptype: u32, data: Bytes) -> Packet {
-    Packet {
-        magic: PacketMagic::REQ,
-        ptype: ptype,
-        psize: data.len() as u32,
-        data: data,
-    }
-}
 
 fn new_noop() -> Packet {
     new_res(NOOP, Bytes::new())
@@ -57,29 +40,6 @@ pub struct GearmanService {
     job_waiters: JobWaiters,
     //remote: Remote,
     client_id: Arc<Mutex<Bytes>>,
-}
-
-pub fn next_field(buf: &mut Bytes) -> Bytes {
-    match buf[..].iter().position(|b| *b == b'\0') {
-        Some(null_pos) => {
-            let value = buf.split_to(null_pos);
-            buf.advance(1);
-            value
-        }
-        None => {
-            let buflen = buf.len();
-            buf.split_to(buflen)
-        }
-    }
-}
-
-pub fn no_response() -> Packet {
-    Packet {
-        magic: PacketMagic::TEXT,
-        ptype: ADMIN_RESPONSE,
-        psize: 0,
-        data: Bytes::new(),
-    }
 }
 
 impl Drop for GearmanService {

@@ -1,6 +1,6 @@
 //use tokio::prelude::*;
 
-use rustygeard::client::Client;
+use rustygear::client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
