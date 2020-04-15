@@ -1,6 +1,6 @@
 [package]
 name = "rustygeard"
-version = "0.2.0"
+version = "0.7.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 edition = "2018"
 
