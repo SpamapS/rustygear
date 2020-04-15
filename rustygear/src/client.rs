@@ -21,6 +21,7 @@ use crate::constants::*;
 type Hostname = String;
 
 #[derive(Debug)]
+/// Used for passing job completion stats to clients
 pub struct JobStatus {
     handle: Bytes,
     known: bool,
@@ -30,7 +31,7 @@ pub struct JobStatus {
     waiting: u32,
 }
 
-/// Client for submitting and tracking jobs
+/// Client for interacting with Gearman service
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
@@ -50,6 +51,7 @@ pub struct Client {
     worker_job_rx: Receiver<WorkerJob>,
 }
 
+/// Each individual connection has one of these for handling  packets
 struct ClientHandler {
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
