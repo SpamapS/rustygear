@@ -37,7 +37,7 @@ pub struct Client {
     connected: Vec<bool>,
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
+    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
     echo_tx: Sender<Bytes>,
     echo_rx: Receiver<Bytes>,
     job_created_tx: Sender<Bytes>,
@@ -46,17 +46,20 @@ pub struct Client {
     status_res_rx: Receiver<JobStatus>,
     error_tx: Sender<(Bytes, Bytes)>,
     error_rx: Receiver<(Bytes, Bytes)>,
+    worker_job_tx: Sender<WorkerJob>,
+    worker_job_rx: Receiver<WorkerJob>,
 }
 
 struct ClientHandler {
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
+    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
     sink_tx: Sender<Packet>,
     echo_tx: Sender<Bytes>,
     job_created_tx: Sender<Bytes>,
     status_res_tx: Sender<JobStatus>,
     error_tx: Sender<(Bytes, Bytes)>,
+    worker_job_tx: Sender<WorkerJob>,
 }
 
 /// Return object for submit_ functions.
@@ -64,6 +67,13 @@ pub struct ClientJob {
     handle: Bytes,
     response_rx: Receiver<WorkUpdate>,
     conn: Option<Arc<Mutex<ClientHandler>>>,
+}
+
+/// Passed to workers
+pub struct WorkerJob {
+    handle: Bytes,
+    function: Bytes,
+    payload: Bytes,
 }
 
 #[derive(Debug)]
@@ -159,12 +169,25 @@ impl ClientJob {
     }
 }
 
+impl WorkerJob {
+    pub fn handle(&self) -> &[u8] {
+        self.handle.as_ref()
+    }
+    pub fn function(&self) -> &[u8] {
+        self.function.as_ref()
+    }
+    pub fn payload(&self) -> &[u8] {
+        self.payload.as_ref()
+    }
+}
+
 impl Client {
     pub fn new() -> Client {
         let (tx, rx) = channel(100); // XXX this is lame
         let (txj, rxj) = channel(100); // XXX this is lame
         let (txs, rxs) = channel(100); // XXX this is lame
         let (txe, rxe) = channel(100); // XXX this is lame
+        let (txw, rxw) = channel(100);
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
@@ -180,6 +203,8 @@ impl Client {
             status_res_rx: rxs,
             error_tx: txe,
             error_rx: rxe,
+            worker_job_tx: txw,
+            worker_job_rx: rxw,
         }
     }
 
@@ -237,6 +262,7 @@ impl Client {
                 self.job_created_tx.clone(),
                 self.status_res_tx.clone(),
                 self.error_tx.clone(),
+                self.worker_job_tx.clone(),
             )));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
@@ -378,7 +404,7 @@ impl Client {
     /// Sends a CAN_DO and registers a callback for it
     pub async fn can_do<F>(self, function: &str, mut func: F) -> Result<Self, io::Error>
     where
-        F: FnMut(&mut ClientJob) -> Result<(), io::Error> + Send + 'static,
+        F: FnMut(&mut WorkerJob) -> Result<(), io::Error> + Send + 'static,
     {
         let conn: Arc<Mutex<ClientHandler>> = {
             let mut conns = self.conns.lock().unwrap();
@@ -406,16 +432,28 @@ impl Client {
         payload.extend(function.bytes());
         let can_do = new_req(CAN_DO, payload.freeze());
         send_packet(conn, can_do).await?;
-        //let rx = Arc::new(Mutex::new(rx));
         runtime::Handle::current().spawn(async move {
-            //let rx = rx.lock().unwrap();
             while let Some(mut job) = rx.recv().await {
                 if let Err(_) = func(&mut job) {
-                    job.work_fail().await.unwrap();
+                    debug!("NOT IMPLEMENTED NO ERROR HANDLING FOR FUNCTIONS");
                 }
             }
         });
         Ok(self)
+    }
+
+    pub async fn work(mut self) -> Result<(), io::Error> {
+        while let Some(job) = self.worker_job_rx.recv().await {
+            let mut jobs_tx_by_func = self.jobs_tx_by_func.lock().unwrap();
+            let tx = match jobs_tx_by_func.get_mut(job.function()) {
+                None => return Err(io::Error::new(io::ErrorKind::Other, format!("Received job for unregistered function: {:?}", job.function()))),
+                Some(tx) => tx,
+            };
+            if let Err(_) = tx.send(job).await {
+                warn!("Ignored a job for an unregistered function"); // XXX We can do much, much better
+            }
+        }
+        Ok(())
     }
 
     /// Gets a single error that might have come from the server. The tuple returned is (code,
@@ -429,12 +467,13 @@ impl ClientHandler {
     fn new(
         client_id: &Option<Bytes>,
         senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-        jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<ClientJob>>>>,
+        jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
         echo_tx: Sender<Bytes>,
         sink_tx: Sender<Packet>,
         job_created_tx: Sender<Bytes>,
         status_res_tx: Sender<JobStatus>,
         error_tx: Sender<(Bytes, Bytes)>,
+        worker_job_tx: Sender<WorkerJob>,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
@@ -445,6 +484,7 @@ impl ClientHandler {
             job_created_tx: job_created_tx,
             status_res_tx: status_res_tx,
             error_tx: error_tx,
+            worker_job_tx: worker_job_tx,
         }
     }
 
@@ -454,7 +494,7 @@ impl ClientHandler {
             //NOOP => self.handle_noop(),
             JOB_CREATED => self.handle_job_created(&req),
             //NO_JOB => self.handle_no_job(&req),
-            //JOB_ASSIGN => self.handle_job_assign(&req),
+            JOB_ASSIGN => self.handle_job_assign(&req),
             ECHO_RES => self.handle_echo_res(&req),
             ERROR => self.handle_error(&req),
             STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
@@ -584,6 +624,23 @@ impl ClientHandler {
         } else {
             error!("Received work for unknown job: {:?}", handle);
         };
+        Ok(no_response())
+    }
+
+    fn handle_job_assign(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+        let mut data = req.data.clone();
+        let handle = next_field(&mut data);
+        let function = next_field(&mut data);
+        let payload = next_field(&mut data);
+        let job = WorkerJob {
+            handle: handle,
+            function: function,
+            payload: payload,
+        };
+        let mut tx = self.worker_job_tx.clone();
+        runtime::Handle::current().spawn(async move {
+            tx.send(job).await
+        });
         Ok(no_response())
     }
 }

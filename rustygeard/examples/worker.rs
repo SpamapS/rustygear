@@ -20,11 +20,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     worker
         .connect()
         .await?
-        .can_do("reverse", |job| Ok(job.data().reverse()))
+        .can_do("reverse", |job| Ok(job.payload().reverse()))
+        .await?
         .can_do("alwaysfail", |job| {
             Err(io::Error::new(io::ErrorKind::Other, "Always fails"))
         })
-        .can_do_async("status", status_user)
+        .await?
+        //.can_do_async("status", status_user)
         .work()
         .await?
 }
