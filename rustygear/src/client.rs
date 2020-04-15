@@ -32,6 +32,13 @@ pub struct JobStatus {
 }
 
 /// Client for interacting with Gearman service
+///
+/// Both workers and clients will use this as the top-level object to communicate
+/// with a gearman server. [Client.new] should produce a functioning structure which
+/// should then be configured as needed. It will not do anything useful until after
+/// [Client.connect] has been called.
+///
+/// See examples/client.rs and examples/worker.rs for information on how to use it.
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
@@ -51,7 +58,7 @@ pub struct Client {
     worker_job_rx: Receiver<WorkerJob>,
 }
 
-/// Each individual connection has one of these for handling  packets
+/// Each individual connection has one of these for handling packets
 struct ClientHandler {
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
@@ -71,6 +78,10 @@ pub struct ClientJob {
 }
 
 /// Passed to workers
+///
+/// The sink_tx property of this structure can be used to send raw packets
+/// to the gearman server from workers, although this is not known to work
+/// generically as of this writing.
 pub struct WorkerJob {
     handle: Bytes,
     function: Bytes,
@@ -126,7 +137,11 @@ impl ClientJob {
     pub fn handle(&self) -> &Bytes {
         &self.handle
     }
+
     /// Should only return when the worker has sent data or completed the job. Errors if used on background jobs.
+    ///
+    /// Use this in clients to wait for a response on a job that was submitted. This will block
+    /// forever or error if used on a background job.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
     }
@@ -144,6 +159,12 @@ impl WorkerJob {
     }
 
     /// Sends a WORK_STATUS
+    ///
+    /// This will send a WORK_STATUS packet to the server, and can be called from a worker,
+    /// although that worker may need to manage its own runtime, and as of this writing, this
+    /// method may not be functional.
+    ///
+    /// See examples/worker.rs for an idea of how it may work.
     pub async fn work_status(&mut self, numerator: u32, denominator: u32) -> Result<(), io::Error> {
         let numerator = format!("{}", numerator);
         let denominator = format!("{}", denominator);
@@ -167,12 +188,18 @@ impl WorkerJob {
     }
 
     /// Sends a WORK_FAIL
+    ///
+    /// This method is typically called by the [Client.work] method upon return
+    /// of an error from the assigned closure.
     pub async fn work_fail(&mut self) -> Result<(), io::Error> {
         let packet = new_res(WORK_FAIL, self.handle.clone());
         self.send_packet(packet).await
     }
 
     /// Sends a WORK_COMPLETE
+    ///
+    /// This method is typically called by the [Client.work] method upon return of
+    /// the assigned closure.
     pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
         let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
         payload.extend(self.handle.clone());
@@ -211,6 +238,8 @@ impl Client {
     }
 
     /// Add a server to the client. This does not initiate anything, it just configures the client.
+    ///
+    /// As of this writing, only one server at a time is supported.
     pub fn add_server(mut self, server: &str) -> Self {
         self.servers.push(Hostname::from(server));
         self.connected.push(false);
@@ -223,7 +252,7 @@ impl Client {
         self
     }
 
-    /// Attempts to connect to all servers
+    /// Attempts to connect to all servers added via [Client.add_server]
     pub async fn connect(mut self) -> Result<Self, Box<dyn std::error::Error>> {
         /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
@@ -404,6 +433,15 @@ impl Client {
     }
 
     /// Sends a CAN_DO and registers a callback for it
+    ///
+    /// This informs the gearman server of what "functions" your worker can perform,
+    /// and it takes a closure which will be passed a mutable reference to jobs assigned
+    /// to it. The function should return a vector of bytes to signal completion, that
+    /// will trigger a WORK_COMPLETE packet to the server with the contents of the returned
+    /// vector as the payload. If it returns an error, this will trigger a WORK_FAIL packet.
+    ///
+    /// See examples/worker.rs for more information.
+    ///
     pub async fn can_do<F>(self, function: &str, mut func: F) -> Result<Self, io::Error>
     where
         F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
@@ -454,6 +492,12 @@ impl Client {
     }
 
     /// Run the assigned jobs through can_do functions until an error happens
+    ///
+    /// After you have set up all functions your worker can do via the
+    /// [Client.can_do] method, call this function to begin working. It will
+    /// not return unless there is an unexpected error.
+    ///
+    /// See examples/worker.rs for more information on how to use it.
     pub async fn work(mut self) -> Result<(), io::Error> {
         loop {
             let job = self.worker_job_rx.try_recv();
