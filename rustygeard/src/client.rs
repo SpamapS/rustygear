@@ -9,6 +9,7 @@ use futures::stream::StreamExt;
 use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::error::TryRecvError;
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
@@ -442,8 +443,27 @@ impl Client {
         Ok(self)
     }
 
+    /// Run the assigned jobs through can_do functions until an error happens
     pub async fn work(mut self) -> Result<(), io::Error> {
-        while let Some(job) = self.worker_job_rx.recv().await {
+        loop {
+            let job = self.worker_job_rx.try_recv();
+            let job = match job {
+                Err(TryRecvError::Empty) => {
+                    let conns = self.conns.lock().unwrap();
+                    for conn in conns.iter() {
+                        let packet = new_req(PRE_SLEEP, Bytes::new());
+                        send_packet(conn.clone(), packet).await?;
+                    }
+                    match self.worker_job_rx.recv().await {
+                        Some(job) => job,
+                        None => return Err(io::Error::new(io::ErrorKind::Other, "Worker job tx are all dropped"))
+                    }
+                },
+                Err(TryRecvError::Closed) => {
+                    return Err(io::Error::new(io::ErrorKind::Other, "Worker job tx are all dropped"))
+                },
+                Ok(job) => job,
+            };
             let mut jobs_tx_by_func = self.jobs_tx_by_func.lock().unwrap();
             let tx = match jobs_tx_by_func.get_mut(job.function()) {
                 None => return Err(io::Error::new(io::ErrorKind::Other, format!("Received job for unregistered function: {:?}", job.function()))),
@@ -453,7 +473,6 @@ impl Client {
                 warn!("Ignored a job for an unregistered function"); // XXX We can do much, much better
             }
         }
-        Ok(())
     }
 
     /// Gets a single error that might have come from the server. The tuple returned is (code,

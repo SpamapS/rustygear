@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .add_server("127.0.0.1:4730")
         .connect()
         .await.expect("CONNECT failed")
-        .can_do("reverse", |mut job| {
+        .can_do("reverse", |job| {
             println!("reversing {:?}", job.payload());
             Ok(())
         })
