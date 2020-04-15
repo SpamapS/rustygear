@@ -8,15 +8,15 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use tokio::net::TcpStream;
 use tokio::runtime;
-use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
 
-use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
 use crate::codec::{Packet, PacketCodec};
 use crate::constants::*;
+use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
 
 type Hostname = String;
 
@@ -105,10 +105,7 @@ pub enum WorkUpdate {
     Fail(Bytes),
 }
 
-async fn send_packet(
-    conn: Arc<Mutex<ClientHandler>>,
-    packet: Packet,
-) -> Result<(), io::Error> {
+async fn send_packet(conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<(), io::Error> {
     let mut sink_tx = conn.lock().unwrap().sink_tx.clone();
     if let Err(e) = sink_tx.send(packet).await {
         error!("Receiver dropped");
@@ -160,7 +157,9 @@ impl ClientJob {
     pub async fn work_status(&mut self, numerator: u32, denominator: u32) -> Result<(), io::Error> {
         let numerator = format!("{}", numerator);
         let denominator = format!("{}", denominator);
-        let mut payload = BytesMut::with_capacity(2 + self.handle.len() + numerator.as_bytes().len() + denominator.as_bytes().len());
+        let mut payload = BytesMut::with_capacity(
+            2 + self.handle.len() + numerator.as_bytes().len() + denominator.as_bytes().len(),
+        );
         payload.extend(self.handle.clone());
         payload.put_u8(b'\0');
         payload.extend(numerator.as_bytes());
@@ -457,17 +456,33 @@ impl Client {
                     }
                     match self.worker_job_rx.recv().await {
                         Some(job) => job,
-                        None => return Err(io::Error::new(io::ErrorKind::Other, "Worker job tx are all dropped"))
+                        None => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                "Worker job tx are all dropped",
+                            ))
+                        }
                     }
-                },
+                }
                 Err(TryRecvError::Closed) => {
-                    return Err(io::Error::new(io::ErrorKind::Other, "Worker job tx are all dropped"))
-                },
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Worker job tx are all dropped",
+                    ))
+                }
                 Ok(job) => job,
             };
             let mut jobs_tx_by_func = self.jobs_tx_by_func.lock().unwrap();
             let tx = match jobs_tx_by_func.get_mut(job.function()) {
-                None => return Err(io::Error::new(io::ErrorKind::Other, format!("Received job for unregistered function: {:?}", job.function()))),
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!(
+                            "Received job for unregistered function: {:?}",
+                            job.function()
+                        ),
+                    ))
+                }
                 Some(tx) => tx,
             };
             if let Err(_) = tx.send(job).await {
@@ -667,9 +682,7 @@ impl ClientHandler {
             payload: payload,
         };
         let mut tx = self.worker_job_tx.clone();
-        runtime::Handle::current().spawn(async move {
-            tx.send(job).await
-        });
+        runtime::Handle::current().spawn(async move { tx.send(job).await });
         Ok(no_response())
     }
 }

@@ -1,5 +1,5 @@
-use std::time::Duration;
 use std::thread;
+use std::time::Duration;
 
 use tokio::prelude::*;
 
@@ -21,18 +21,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     worker
         .add_server("127.0.0.1:4730")
         .connect()
-        .await.expect("CONNECT failed")
+        .await
+        .expect("CONNECT failed")
         .can_do("reverse", |job| {
             println!("reversing {:?}", job.payload());
             Ok(())
         })
-        .await.expect("CAN_DO reverse failed")
+        .await
+        .expect("CAN_DO reverse failed")
         .can_do("alwaysfail", |_job| {
             Err(io::Error::new(io::ErrorKind::Other, "Always fails"))
         })
-        .await.expect("CAN_DO alwaysfail failed")
+        .await
+        .expect("CAN_DO alwaysfail failed")
         //.can_do_async("status", status_user)
         .work()
-        .await.expect("WORK FAILED");
+        .await
+        .expect("WORK FAILED");
     Ok(())
 }
