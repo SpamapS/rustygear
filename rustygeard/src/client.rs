@@ -416,7 +416,7 @@ impl Client {
             let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
             {
                 let mut k = Vec::with_capacity(function.len());
-                k.clone_from_slice(function.as_bytes());
+                k.extend_from_slice(function.as_bytes());
                 if let Some(_) = jobs_tx_by_func.get(&k) {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
@@ -425,7 +425,7 @@ impl Client {
                 }
             }
             let mut k = Vec::with_capacity(function.len());
-            k.clone_from_slice(function.as_bytes());
+            k.extend_from_slice(function.as_bytes());
             jobs_tx_by_func.insert(k, tx.clone());
         }
         let mut payload = BytesMut::with_capacity(function.len());
