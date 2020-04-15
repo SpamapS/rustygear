@@ -510,9 +510,9 @@ impl ClientHandler {
     fn call(&mut self, req: Packet) -> Result<Packet, io::Error> {
         debug!("[{:?}] Got a req {:?}", self.client_id, req);
         match req.ptype {
-            //NOOP => self.handle_noop(),
+            NOOP => self.handle_noop(),
             JOB_CREATED => self.handle_job_created(&req),
-            //NO_JOB => self.handle_no_job(&req),
+            NO_JOB => self.handle_no_job(),
             JOB_ASSIGN => self.handle_job_assign(&req),
             ECHO_RES => self.handle_echo_res(&req),
             ERROR => self.handle_error(&req),
@@ -531,6 +531,15 @@ impl ClientHandler {
                 ))
             }
         }
+    }
+
+    fn handle_noop(&self) -> Result<Packet, io::Error> {
+        Ok(new_req(GRAB_JOB, Bytes::new()))
+    }
+
+    fn handle_no_job(&self) -> Result<Packet, io::Error> {
+        // We could send a PRE_SLEEP but it might confuse the state machine
+        Ok(no_response())
     }
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
