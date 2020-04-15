@@ -3,10 +3,10 @@ use std::time::Duration;
 
 use tokio::prelude::*;
 
-use rustygear::client::{Client, ClientJob};
+use rustygear::client::{Client, WorkerJob};
 
 /// When we use the status method, we need to be async!
-async fn status_user(mut job: ClientJob) -> Result<Vec<u8>, io::Error> {
+async fn status_user(mut job: WorkerJob) -> Result<Vec<u8>, io::Error> {
     job.work_status(50, 100).await?;
     thread::sleep(Duration::from_secs(1));
     let mut rs = Vec::new();
@@ -24,8 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .expect("CONNECT failed")
         .can_do("reverse", |job| {
-            println!("reversing {:?}", job.payload());
-            Ok(())
+            let payload = String::from_utf8(job.payload().to_vec()).unwrap();
+            println!("reversing {}", payload);
+            let reversed: String = payload.chars().rev().collect();
+            let reversed: Vec<u8> = reversed.into_bytes();
+            Ok(reversed)
         })
         .await
         .expect("CAN_DO reverse failed")

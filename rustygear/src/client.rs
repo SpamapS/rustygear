@@ -68,7 +68,6 @@ struct ClientHandler {
 pub struct ClientJob {
     handle: Bytes,
     response_rx: Receiver<WorkUpdate>,
-    conn: Option<Arc<Mutex<ClientHandler>>>,
 }
 
 /// Passed to workers
@@ -76,6 +75,7 @@ pub struct WorkerJob {
     handle: Bytes,
     function: Bytes,
     payload: Bytes,
+    sink_tx: Sender<Packet>,
 }
 
 #[derive(Debug)]
@@ -115,15 +115,10 @@ async fn send_packet(conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<
 }
 
 impl ClientJob {
-    fn new(
-        handle: Bytes,
-        response_rx: Receiver<WorkUpdate>,
-        conn: Option<Arc<Mutex<ClientHandler>>>,
-    ) -> ClientJob {
+    fn new(handle: Bytes, response_rx: Receiver<WorkUpdate>) -> ClientJob {
         ClientJob {
             handle: handle,
             response_rx: response_rx,
-            conn: conn,
         }
     }
 
@@ -135,22 +130,17 @@ impl ClientJob {
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         Ok(self.response_rx.recv().await.unwrap())
     }
+}
 
-    async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
-        if let Some(conn) = &self.conn {
-            send_packet(conn.clone(), packet).await
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "No connection on which to send WORK_FAIL",
-            ))
-        }
+impl WorkerJob {
+    pub fn handle(&self) -> &[u8] {
+        self.handle.as_ref()
     }
-
-    /// Sends a WORK_FAIL
-    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
-        let packet = new_res(WORK_FAIL, self.handle.clone());
-        self.send_packet(packet).await
+    pub fn function(&self) -> &[u8] {
+        self.function.as_ref()
+    }
+    pub fn payload(&self) -> &[u8] {
+        self.payload.as_ref()
     }
 
     /// Sends a WORK_STATUS
@@ -168,17 +158,28 @@ impl ClientJob {
         let packet = new_res(WORK_STATUS, payload.freeze());
         self.send_packet(packet).await
     }
-}
 
-impl WorkerJob {
-    pub fn handle(&self) -> &[u8] {
-        self.handle.as_ref()
+    async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
+        match self.sink_tx.send(packet).await {
+            Err(_) => Err(io::Error::new(io::ErrorKind::Other, "Connection closed")),
+            Ok(_) => Ok(()),
+        }
     }
-    pub fn function(&self) -> &[u8] {
-        self.function.as_ref()
+
+    /// Sends a WORK_FAIL
+    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
+        let packet = new_res(WORK_FAIL, self.handle.clone());
+        self.send_packet(packet).await
     }
-    pub fn payload(&self) -> &[u8] {
-        self.payload.as_ref()
+
+    /// Sends a WORK_COMPLETE
+    pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
+        let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
+        payload.extend(self.handle.clone());
+        payload.put_u8(b'\0');
+        payload.extend(response);
+        let packet = new_res(WORK_COMPLETE, payload.freeze());
+        self.send_packet(packet).await
     }
 }
 
@@ -379,7 +380,7 @@ impl Client {
             let (tx, rx) = channel(100); // XXX lamer
             let mut response_by_handle = self.senders_by_handle.lock().unwrap();
             response_by_handle.insert(handle.clone(), tx.clone());
-            Ok(ClientJob::new(handle, rx, Some(conn.clone())))
+            Ok(ClientJob::new(handle, rx))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
         }
@@ -405,7 +406,7 @@ impl Client {
     /// Sends a CAN_DO and registers a callback for it
     pub async fn can_do<F>(self, function: &str, mut func: F) -> Result<Self, io::Error>
     where
-        F: FnMut(&mut WorkerJob) -> Result<(), io::Error> + Send + 'static,
+        F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
     {
         let conn: Arc<Mutex<ClientHandler>> = {
             let mut conns = self.conns.lock().unwrap();
@@ -435,8 +436,17 @@ impl Client {
         send_packet(conn, can_do).await?;
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
-                if let Err(_) = func(&mut job) {
-                    debug!("NOT IMPLEMENTED NO ERROR HANDLING FOR FUNCTIONS");
+                match func(&mut job) {
+                    Err(_) => {
+                        if let Err(e) = job.work_fail().await {
+                            warn!("Failed to send WORK_FAIL {}", e);
+                        }
+                    }
+                    Ok(response) => {
+                        if let Err(e) = job.work_complete(response).await {
+                            warn!("Failed to send WORK_COMPLETE {}", e);
+                        }
+                    }
                 }
             }
         });
@@ -451,7 +461,7 @@ impl Client {
                 Err(TryRecvError::Empty) => {
                     let conns = self.conns.lock().unwrap();
                     for conn in conns.iter() {
-                        let packet = new_req(PRE_SLEEP, Bytes::new());
+                        let packet = new_req(GRAB_JOB, Bytes::new());
                         send_packet(conn.clone(), packet).await?;
                     }
                     match self.worker_job_rx.recv().await {
@@ -554,8 +564,7 @@ impl ClientHandler {
     }
 
     fn handle_no_job(&self) -> Result<Packet, io::Error> {
-        // We could send a PRE_SLEEP but it might confuse the state machine
-        Ok(no_response())
+        Ok(new_req(PRE_SLEEP, Bytes::new()))
     }
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
@@ -680,6 +689,7 @@ impl ClientHandler {
             handle: handle,
             function: function,
             payload: payload,
+            sink_tx: self.sink_tx.clone(),
         };
         let mut tx = self.worker_job_tx.clone();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
