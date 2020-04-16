@@ -1,10 +1,12 @@
 [package]
 name = "rustygeard"
+description = "An experimental, full-featured gearman server."
 version = "0.7.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 license = "Apache-2.0"
 edition = "2018"
 keywords = ["gearman", "server"]
+homepage = "https://github.com/SpamapS/rustygear"
 
 [dependencies]
 bytes = ">=0.5.0"
