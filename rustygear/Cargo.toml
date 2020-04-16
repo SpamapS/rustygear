@@ -10,10 +10,10 @@ keywords = ["gearman", "client"]
 
 [dependencies]
 bytes = ">=0.5.0"
-hash_ring = "*"
-log = "*"
-env_logger = "*"
-futures = "*"
+hash_ring = ">=0.1.7"
+log = ">=0.4.8"
+env_logger = ">=0.7.1"
+futures = ">=0.3.4""
 tokio = { version = "0.2", features = ["full"] }
-tokio-util = { version = "*", features = ["codec"] }
-uuid = { version = "*", features = ["v4"] }
+tokio-util = { version = "0.3", features = ["codec"] }
+uuid = { version = "0.8", features = ["v4"] }
