@@ -10,11 +10,11 @@ homepage = "https://github.com/SpamapS/rustygear"
 
 [dependencies]
 bytes = ">=0.5.0"
-rustygear = "*"
-log = "*"
+rustygear = "0.7.0"
+log = ">=0.4.8"
 env_logger = ">=0.6.0"
 tokio = { version = "0.2", features = ["full"] }
-tokio-util = { version = "*", features = ["codec"] }
-tower-service = "*"
-futures = "*"
-wrappinghashset = "*"
+tokio-util = { version = "0.3", features = ["codec"] }
+tower-service = "0.3"
+futures = "0.3"
+wrappinghashset = ">=0.4.1"
