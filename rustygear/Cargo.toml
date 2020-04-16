@@ -1,7 +1,10 @@
 [package]
 name = "rustygear"
+description = "Client library for communicating via the gearman protocol"
+homepage = "https://github.com/SpamapS/rustygear"
 version = "0.7.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
+license = "Apache-2.0"
 edition = "2018"
 
 [dependencies]

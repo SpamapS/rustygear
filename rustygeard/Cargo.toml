@@ -2,15 +2,16 @@
 name = "rustygeard"
 version = "0.7.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
+license = "Apache-2.0"
 edition = "2018"
 
 [dependencies]
 bytes = ">=0.5.0"
-rustygear = { path = "../rustygear" }
+rustygear = "*"
 log = "*"
 env_logger = ">=0.6.0"
 tokio = { version = "0.2", features = ["full"] }
 tokio-util = { version = "*", features = ["codec"] }
 tower-service = "*"
 futures = "*"
-wrappinghashset = { git = "https://github.com/SpamapS/wrappinghashset.git" }
+wrappinghashset = "*"
