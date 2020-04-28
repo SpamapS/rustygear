@@ -11,6 +11,7 @@
 /rustygear/target/
 /rustygeard/target/
 /rustygear/Cargo.lock
+/target
 
 # rustfmt trash
 *.rustfmt
