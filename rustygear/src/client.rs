@@ -447,9 +447,9 @@ impl Client {
         }
     }
 
-    /// Sends a CAN_DO and registers a callback for it
+    /// Sends a CAN_DO on every connection and registers a callback for it
     ///
-    /// This informs the gearman server of what "functions" your worker can perform,
+    /// This informs the gearman server(s) of what "functions" your worker can perform,
     /// and it takes a closure which will be passed a mutable reference to jobs assigned
     /// to it. The function should return a vector of bytes to signal completion, that
     /// will trigger a WORK_COMPLETE packet to the server with the contents of the returned
@@ -461,32 +461,24 @@ impl Client {
     where
         F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
     {
-        let conn: Arc<Mutex<ClientHandler>> = {
-            let mut conns = self.conns.lock().unwrap();
-            conns.get_mut(0).unwrap().clone()
-        };
         let (tx, mut rx) = channel(100); // Some day we'll use this param right
         {
-            let conn = conn.lock().unwrap();
-            let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
-            {
-                let mut k = Vec::with_capacity(function.len());
-                k.extend_from_slice(function.as_bytes());
-                if let Some(_) = jobs_tx_by_func.get(&k) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("function {} already registered.", function),
-                    ));
+            let mut conns = self.conns.lock().unwrap();
+            for conn in conns.iter_mut() {
+                {
+                    let conn = conn.lock().unwrap();
+                    let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
+                    let mut k = Vec::with_capacity(function.len());
+                    k.extend_from_slice(function.as_bytes());
+                    // Same tx for all jobs, the jobs themselves will have a response conn ref
+                    jobs_tx_by_func.entry(k).or_insert(tx.clone());
                 }
+                let mut payload = BytesMut::with_capacity(function.len());
+                payload.extend(function.bytes());
+                let can_do = new_req(CAN_DO, payload.freeze());
+                send_packet(conn.clone(), can_do).await?;
             }
-            let mut k = Vec::with_capacity(function.len());
-            k.extend_from_slice(function.as_bytes());
-            jobs_tx_by_func.insert(k, tx.clone());
         }
-        let mut payload = BytesMut::with_capacity(function.len());
-        payload.extend(function.bytes());
-        let can_do = new_req(CAN_DO, payload.freeze());
-        send_packet(conn, can_do).await?;
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
                 match func(&mut job) {
