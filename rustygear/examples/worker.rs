@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     worker
         .add_server("127.0.0.1:4730")
         //.add_server("127.0.0.1:4731")  Add all of your servers here
+        .set_client_id("example")
         .connect()
         .await
         .expect("CONNECT failed")

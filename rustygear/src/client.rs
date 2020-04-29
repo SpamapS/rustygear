@@ -296,6 +296,10 @@ impl Client {
             );
             let pc = PacketCodec {};
             let (mut sink, mut stream) = pc.framed(conn).split();
+            if let Some(ref client_id) = self.client_id {
+                let req = new_req(SET_CLIENT_ID, client_id.clone());
+                sink.send(req).await?;
+            }
             let (tx, mut rx) = channel(100); // XXX pick a good value or const
             let tx = tx.clone();
             let tx2 = tx.clone();
