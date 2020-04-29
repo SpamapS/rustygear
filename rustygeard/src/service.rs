@@ -4,6 +4,7 @@ use std::ops::Drop;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
 
 use core::task::{Context, Poll};
 
@@ -29,6 +30,7 @@ fn new_noop() -> Packet {
 
 type JobWaiters = Arc<Mutex<HashMap<Bytes, Vec<usize>>>>;
 type SendersByConnId = Arc<Mutex<HashMap<usize, Sender<Packet>>>>;
+pub type WorkersByConnId = Arc<Mutex<HashMap<usize, Arc<Mutex<Worker>>>>>;
 
 pub struct GearmanService {
     pub conn_id: usize,
@@ -37,8 +39,8 @@ pub struct GearmanService {
     pub worker: Arc<Mutex<Worker>>,
     pub job_count: Arc<AtomicUsize>,
     senders_by_conn_id: SendersByConnId,
+    workers_by_conn_id: WorkersByConnId,
     job_waiters: JobWaiters,
-    //remote: Remote,
     client_id: Arc<Mutex<Bytes>>,
 }
 
@@ -99,18 +101,19 @@ impl GearmanService {
         workers: SharedWorkers,
         job_count: Arc<AtomicUsize>,
         senders_by_conn_id: SendersByConnId,
+        workers_by_conn_id: WorkersByConnId,
         job_waiters: JobWaiters,
-        //remote: Remote,
+        peer_addr: SocketAddr,
     ) -> GearmanService {
         GearmanService {
             conn_id: conn_id,
             queues: queues,
-            worker: Arc::new(Mutex::new(Worker::new())),
+            worker: Arc::new(Mutex::new(Worker::new(peer_addr))),
             workers: workers,
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,
+            workers_by_conn_id: workers_by_conn_id,
             job_waiters: job_waiters,
-            //remote: remote,
             client_id: Arc::new(Mutex::new(Bytes::new())),
         }
     }

@@ -4,6 +4,7 @@ use self::wrappinghashset::{Iter, WrappingHashSet};
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
 
 use bytes::Bytes;
 
@@ -150,13 +151,15 @@ impl Workers {
 
 #[derive(Debug)]
 pub struct Worker {
+    pub peer_addr: SocketAddr,
     pub functions: WrappingHashSet<Bytes>,
     jobs: HashMap<Bytes, Arc<Job>>,
 }
 
 impl Worker {
-    pub fn new() -> Worker {
+    pub fn new(peer_addr: SocketAddr) -> Worker {
         Worker {
+            peer_addr: peer_addr,
             functions: WrappingHashSet::new(),
             jobs: HashMap::new(),
         }
