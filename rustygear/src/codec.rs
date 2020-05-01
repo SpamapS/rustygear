@@ -57,6 +57,7 @@ impl fmt::Debug for Packet {
             _p @ ADMIN_VERSION => "ADMIN_VERSION",
             _p @ ADMIN_UNKNOWN => "ADMIN_UNKNOWN",
             _p @ ADMIN_RESPONSE => "ADMIN_RESPONSE",
+            _p @ ADMIN_WORKERS => "ADMIN_WORKERS",
             _ => &unimpl,
         };
         write!(
@@ -89,6 +90,7 @@ impl Packet {
             let command = match data_str.trim() {
                 "version" => ADMIN_VERSION,
                 "status" => ADMIN_STATUS,
+                "workers" => ADMIN_WORKERS,
                 _ => ADMIN_UNKNOWN,
             };
             return Ok(Some(Packet {

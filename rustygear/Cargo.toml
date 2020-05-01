@@ -2,7 +2,7 @@
 name = "rustygear"
 description = "Client library for communicating via the gearman protocol"
 homepage = "https://github.com/SpamapS/rustygear"
-version = "0.7.1"
+version = "0.8.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 license = "Apache-2.0"
 edition = "2018"

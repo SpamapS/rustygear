@@ -1,18 +1,6 @@
-use std::thread;
-use std::time::Duration;
-
 use tokio::prelude::*;
 
-use rustygear::client::{Client, WorkerJob};
-
-/// When we use the status method, we need to be async!
-async fn status_user(mut job: WorkerJob) -> Result<Vec<u8>, io::Error> {
-    job.work_status(50, 100).await?;
-    thread::sleep(Duration::from_secs(1));
-    let mut rs = Vec::new();
-    rs.extend_from_slice("all done".as_bytes());
-    Ok(rs)
-}
+use rustygear::client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

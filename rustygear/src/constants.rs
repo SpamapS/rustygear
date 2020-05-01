@@ -60,6 +60,7 @@ pub const ADMIN_UNKNOWN: u32 = 10000;
 pub const ADMIN_STATUS: u32 = 10001;
 pub const ADMIN_VERSION: u32 = 10002;
 pub const ADMIN_RESPONSE: u32 = 10003;
+pub const ADMIN_WORKERS: u32 = 10004;
 
 pub const REQ: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
 pub const RES: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
