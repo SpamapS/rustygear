@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::convert::TryInto;
 use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
@@ -29,7 +29,7 @@ impl GearmanServer {
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
-        let workers_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
+        let workers_by_conn_id = Arc::new(Mutex::new(BTreeMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
         let mut rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
@@ -51,24 +51,25 @@ impl GearmanServer {
                         // Read stuff, write if needed
                         let senders_by_conn_id = senders_by_conn_id.clone();
                         let workers_by_conn_id = workers_by_conn_id.clone();
+                        let senders_by_conn_id_w = senders_by_conn_id.clone();
+                        let workers_by_conn_id_w = workers_by_conn_id.clone();
                         let queues = queues.clone();
                         let workers = workers.clone();
                         let job_count = job_count.clone();
                         let job_waiters = job_waiters.clone();
                         let reader = async move {
-                            let senders_by_conn_id = senders_by_conn_id.clone();
                             let mut service = GearmanService::new(
                                 conn_id,
                                 queues,
                                 workers,
                                 job_count,
                                 senders_by_conn_id,
-                                workers_by_conn_id,
+                                workers_by_conn_id.clone(),
                                 job_waiters,
                                 peer_addr,
                             );
                             {
-                                let workers_by_conn_id = workers_by_conn_id.lock().unwrap();
+                                let mut workers_by_conn_id = workers_by_conn_id.lock().unwrap();
                                 workers_by_conn_id.insert(conn_id, service.worker.clone());
                             }
                             let mut tx = tx.clone();
@@ -87,11 +88,11 @@ impl GearmanServer {
                                 trace!("Sending {:?}", &packet);
                                 if let Err(_) = sink.send(packet).await {
                                     {
-                                        let workers_by_conn_id = workers_by_conn_id.lock().unwrap();
+                                        let mut workers_by_conn_id = workers_by_conn_id_w.lock().unwrap();
                                         workers_by_conn_id.remove(&conn_id);
                                     }
                                     {
-                                        let senders_by_conn_id = senders_by_conn_id.lock().unwrap();
+                                        let mut senders_by_conn_id = senders_by_conn_id_w.lock().unwrap();
                                         senders_by_conn_id.remove(&conn_id);
                                     }
                                     error!("Connection ({}) dropped", conn_id);

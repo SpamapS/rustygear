@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 
 use rustygear::codec::Packet;
 
@@ -36,12 +36,18 @@ pub fn admin_command_workers(workers: WorkersByConnId) -> Packet {
     let mut response = BytesMut::with_capacity(1024 * 1024); // XXX Wild guess.
     let workers = workers.lock().unwrap();
     for (conn_id, worker) in workers.iter() {
-        let worker = worker.lock().unwrap();
-        response.extend(format!("{}\t{}\t{}\t:", conn_id, worker.peer_addr, worker.client_id.unwrap_or(b"-")).into_bytes());
+        // This is mutable because it will wrap around the wrapping hashset
+        // Since we'll fully wrap it, while locked, that should be fine and
+        // actually makes the workers command more useful as it lets us see
+        // where in the roundrobin each worker is
+        let mut worker = worker.lock().unwrap();
+        let client_id = String::from_utf8(worker.client_id.to_vec()).unwrap();
+        response.extend(format!("{} {} {} :", conn_id, worker.peer_addr, client_id).bytes());
         for func in worker.functions.iter() {
-            response.put_u8(b"\t");
+            response.put_u8(b' ');
             response.extend(func);
         }
+        response.put_u8(b'\n');
     }
     response.extend(b".\n");
     let response = response.freeze();

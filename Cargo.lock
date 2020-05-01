@@ -520,14 +520,14 @@ dependencies = [
 
 [[package]]
 name = "rustygeard"
-version = "0.7.1"
+version = "0.8.0"
 dependencies = [
  "bytes",
  "clap",
  "env_logger",
  "futures",
  "log",
- "rustygear 0.7.0",
+ "rustygear",
  "tokio",
  "tokio-util",
  "tower-service",

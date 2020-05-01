@@ -153,14 +153,16 @@ impl Workers {
 pub struct Worker {
     pub peer_addr: SocketAddr,
     pub functions: WrappingHashSet<Bytes>,
+    pub client_id: Bytes,
     jobs: HashMap<Bytes, Arc<Job>>,
 }
 
 impl Worker {
-    pub fn new(peer_addr: SocketAddr) -> Worker {
+    pub fn new(peer_addr: SocketAddr, client_id: Bytes) -> Worker {
         Worker {
             peer_addr: peer_addr,
             functions: WrappingHashSet::new(),
+            client_id: client_id,
             jobs: HashMap::new(),
         }
     }

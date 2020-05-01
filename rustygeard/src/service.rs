@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap};
 use std::io;
 use std::ops::Drop;
 use std::pin::Pin;
@@ -30,7 +30,7 @@ fn new_noop() -> Packet {
 
 type JobWaiters = Arc<Mutex<HashMap<Bytes, Vec<usize>>>>;
 type SendersByConnId = Arc<Mutex<HashMap<usize, Sender<Packet>>>>;
-pub type WorkersByConnId = Arc<Mutex<HashMap<usize, Arc<Mutex<Worker>>>>>;
+pub type WorkersByConnId = Arc<Mutex<BTreeMap<usize, Arc<Mutex<Worker>>>>>;
 
 pub struct GearmanService {
     pub conn_id: usize,
@@ -41,7 +41,6 @@ pub struct GearmanService {
     senders_by_conn_id: SendersByConnId,
     workers_by_conn_id: WorkersByConnId,
     job_waiters: JobWaiters,
-    client_id: Arc<Mutex<Bytes>>,
 }
 
 impl Drop for GearmanService {
@@ -71,6 +70,9 @@ impl GearmanService {
                 self.queues.clone(),
                 self.workers.clone(),
             )),
+            ADMIN_WORKERS => Ok(admin::admin_command_workers(
+                self.workers_by_conn_id.clone())
+            ),
             _ => panic!(
                 "response_from_packet called with invalid ptype: {}",
                 packet.ptype
@@ -108,13 +110,12 @@ impl GearmanService {
         GearmanService {
             conn_id: conn_id,
             queues: queues,
-            worker: Arc::new(Mutex::new(Worker::new(peer_addr))),
+            worker: Arc::new(Mutex::new(Worker::new(peer_addr, Bytes::from("-")))),
             workers: workers,
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,
             workers_by_conn_id: workers_by_conn_id,
             job_waiters: job_waiters,
-            client_id: Arc::new(Mutex::new(Bytes::new())),
         }
     }
 
@@ -334,8 +335,8 @@ impl GearmanService {
 
     fn handle_set_client_id(&self, packet: &Packet) -> Result<Packet, io::Error> {
         let d = packet.data.clone();
-        let mut client_id = self.client_id.lock().unwrap();
-        *client_id = d;
+        let mut worker = self.worker.lock().unwrap();
+        worker.client_id = d;
         Ok(no_response())
     }
 
@@ -380,9 +381,9 @@ impl Service<Packet> for GearmanService {
     }
 
     fn call(&mut self, req: Packet) -> Self::Future {
-        debug!("[{:?}] Got a req {:?}", self.client_id.lock(), req);
+        debug!("[{}:{:?}] Got a req {:?}", self.conn_id, self.worker.lock().unwrap().client_id, req);
         let res = match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS => self.response_from_packet(&req),
+            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS => self.response_from_packet(&req),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
             SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
             SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),
