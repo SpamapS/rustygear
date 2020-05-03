@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::cmp::min;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
@@ -25,15 +26,19 @@ use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::time::{delay_for, Duration};
 use tokio_util::codec::Decoder;
 
+use hashring::HashRing;
 use uuid::Uuid;
 
-use crate::codec::{Packet, PacketCodec};
+use crate::codec::{Packet, PacketCodec, PacketMagic};
 use crate::constants::*;
 use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
 
 type Hostname = String;
+
+const MAX_BACKOFF_SECONDS: u64 = 15;
 
 #[derive(Debug)]
 /// Used for passing job completion stats to clients
@@ -56,7 +61,8 @@ pub struct JobStatus {
 /// See examples/client.rs and examples/worker.rs for information on how to use it.
 pub struct Client {
     servers: Vec<Hostname>,
-    conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
+    hash_ring: HashRing<Hostname>,
+    conns: Arc<Mutex<HashMap<Hostname, Arc<Mutex<ClientHandler>>>>>,
     connected: Vec<bool>,
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
@@ -234,7 +240,8 @@ impl Client {
         let (txw, rxw) = channel(100);
         Client {
             servers: Vec::new(),
-            conns: Arc::new(Mutex::new(Vec::new())),
+            hash_ring: HashRing::new(),
+            conns: Arc::new(Mutex::new(HashMap::new())),
             connected: Vec::new(),
             client_id: None,
             senders_by_handle: Arc::new(Mutex::new(HashMap::new())),
@@ -256,7 +263,9 @@ impl Client {
     ///
     /// As of this writing, only one server at a time is supported.
     pub fn add_server(mut self, server: &str) -> Self {
-        self.servers.push(Hostname::from(server));
+        let server = Hostname::from(server);
+        self.servers.push(server.clone());
+        self.hash_ring.add(server);
         self.connected.push(false);
         self
     }
@@ -268,118 +277,160 @@ impl Client {
     }
 
     /// Attempts to connect to all servers added via [Client.add_server]
+    ///
+    /// This spawns a thread which will not only connect to all servers but
+    /// will also reconnect to those servers on errors.
+    /// 
+    /// It follows the builder pattern and returns the client after having
+    /// started to connect to all servers.
+    ///
+    /// TODO: give a way to block on conns and detect failures
     pub async fn connect(mut self) -> Result<Self, Box<dyn std::error::Error>> {
-        /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
-        let mut i = 0;
-        let mut connects = Vec::new();
-        for is_conn in self.connected.iter() {
-            if !is_conn {
-                let server: &str = self.servers.get(i).unwrap();
-                let addr = server.parse::<SocketAddr>()?;
-                trace!("really connecting: i={} addr={:?}", i, addr);
-                connects.push(
-                    runtime::Handle::current()
-                        .spawn(async move { (i, TcpStream::connect(addr).await) }),
+        let (conn_tx, mut conn_rx): (Sender<Hostname>, Receiver<Hostname>) = channel(10);
+        let conn_tx_w = conn_tx.clone();
+        let mut conn_tx_r = conn_tx.clone();
+        let client_id = self.client_id.clone();
+        let senders_by_handle = self.senders_by_handle.clone();
+        let jobs_tx_by_func = self.jobs_tx_by_func.clone();
+        let echo_tx = self.echo_tx.clone();
+        let job_created_tx = self.job_created_tx.clone();
+        let status_res_tx = self.status_res_tx.clone();
+        let error_tx = self.error_tx.clone();
+        let worker_job_tx = self.worker_job_tx.clone();
+        let conns = self.conns.clone();
+        runtime::Handle::current().spawn(async move {
+            let mut backoffs: HashMap<Hostname, u64> = HashMap::new();
+            while let Some(server) = conn_rx.recv().await {
+                let addr = server.parse::<SocketAddr>().unwrap();
+                trace!("really connecting: server={} addr={:?}", server, addr);
+                let conn = match TcpStream::connect(addr).await {
+                    Ok(conn) => {
+                        backoffs.insert(server.clone(), 1); // Reset on success
+                        conn
+                    },
+                    Err(e) => {
+                        let backoff = match backoffs.get(&server) {
+                            None => 1,
+                            Some(backoff) => *backoff,
+                        };
+                        backoffs.insert(server.clone(), min(MAX_BACKOFF_SECONDS, backoff*2));
+                        error!("Connection error: {}, sleeping {} seconds and retrying", e, backoff);
+                        let mut conn_tx = conn_tx.clone();
+                        runtime::Handle::current().spawn( async move {
+                            let delay = Duration::new(backoff, 0);
+                            delay_for(delay).await;
+                            conn_tx.send(server).await.unwrap();
+                        });
+                        continue
+                    }
+                };
+                trace!(
+                    "connected: server={} addr={:?}",
+                    server, addr
                 );
-            }
-            i = i + 1;
-        }
-        for connect in connects.iter_mut() {
-            let connect = connect.await?;
-            let offset = connect.0;
-            let conn = connect.1?;
-            trace!(
-                "connected: offset={} server={}",
-                offset,
-                self.servers[offset]
-            );
-            let pc = PacketCodec {};
-            let (mut sink, mut stream) = pc.framed(conn).split();
-            if let Some(ref client_id) = self.client_id {
-                let req = new_req(SET_CLIENT_ID, client_id.clone());
-                sink.send(req).await?;
-            }
-            let (tx, mut rx) = channel(100); // XXX pick a good value or const
-            let tx = tx.clone();
-            let tx2 = tx.clone();
-            let handler = Arc::new(Mutex::new(ClientHandler::new(
-                &self.client_id,
-                self.senders_by_handle.clone(),
-                self.jobs_tx_by_func.clone(),
-                self.echo_tx.clone(),
-                tx2,
-                self.job_created_tx.clone(),
-                self.status_res_tx.clone(),
-                self.error_tx.clone(),
-                self.worker_job_tx.clone(),
-            )));
-            self.connected[offset] = true;
-            self.conns.lock().unwrap().insert(offset, handler.clone());
-            let reader = async move {
-                let mut tx = tx.clone();
-                while let Some(frame) = stream.next().await {
-                    trace!("Frame read: {:?}", frame);
-                    let response = {
-                        let handler = handler.clone();
-                        debug!("Locking handler");
-                        let mut handler = handler.lock().unwrap();
-                        debug!("Locked handler");
-                        handler.call(frame.unwrap())
-                    };
-                    if let Err(e) = response {
-                        error!("conn dropped?: {}", e);
-                        return;
-                    }
-                    if let Err(_) = tx.send(response.unwrap()).await {
-                        error!("receiver dropped")
+                let pc = PacketCodec {};
+                let (mut sink, mut stream) = pc.framed(conn).split();
+                if let Some(ref client_id) = client_id {
+                    let req = new_req(SET_CLIENT_ID, client_id.clone());
+                    if let Err(e) = sink.send(req).await {
+                        error!("Server ({}) send error: {}", server, e);
+                        let mut conn_tx = conn_tx.clone();
+                        conn_tx.send(server).await.expect("Connection thread failed");
+                        continue
                     }
                 }
-            };
-            let writer = async move {
-                while let Some(packet) = rx.next().await {
-                    trace!("Sending {:?}", &packet);
-                    if let Err(_) = sink.send(packet).await {
-                        error!("Connection ({}) dropped", offset);
+                let (tx, mut rx) = channel(100); // XXX pick a good value or const
+                let tx = tx.clone();
+                let tx2 = tx.clone();
+                let handler = Arc::new(Mutex::new(ClientHandler::new(
+                    &client_id,
+                    senders_by_handle.clone(),
+                    jobs_tx_by_func.clone(),
+                    echo_tx.clone(),
+                    tx2,
+                    job_created_tx.clone(),
+                    status_res_tx.clone(),
+                    error_tx.clone(),
+                    worker_job_tx.clone(),
+                )));
+                let conns = conns.clone();
+                conns.lock().unwrap().insert(server.clone(), handler.clone());
+                let mut conn_tx = conn_tx.clone();
+                let server = server.clone();
+                let server_w = server.clone();
+                let reader = async move {
+                    let mut tx = tx.clone();
+                    while let Some(Ok(frame)) = stream.next().await {
+                        if frame.magic == PacketMagic::EOF {
+                            info!("disconnected, reconnecting");
+                            conn_tx.send(server).await.unwrap();
+                            return
+                        }
+                        trace!("Frame read: {:?}", frame);
+                        let response = {
+                            let handler = handler.clone();
+                            debug!("Locking handler");
+                            let mut handler = handler.lock().unwrap();
+                            debug!("Locked handler");
+                            handler.call(frame)
+                        };
+                        if let Err(e) = response {
+                            error!("conn dropped?: {}", e);
+                            return;
+                        }
+                        if let Err(_) = tx.send(response.unwrap()).await {
+                            error!("receiver dropped")
+                        }
                     }
-                }
-            };
-            runtime::Handle::current().spawn(reader);
-            runtime::Handle::current().spawn(writer);
+                };
+                let server = server_w;
+                let mut conn_tx_w = conn_tx_w.clone();
+                let writer = async move {
+                    while let Some(packet) = rx.next().await {
+                        trace!("Sending {:?}", &packet);
+                        if let Err(_) = sink.send(packet).await {
+                            error!("Connection ({}) dropped", server);
+                            conn_tx_w.send(server).await.unwrap();
+                            return
+                        }
+                    }
+                };
+                runtime::Handle::current().spawn(reader);
+                runtime::Handle::current().spawn(writer);
+            }
+        });
+        // We don't need this list to stay intact since we'll never reference it again
+        for server in self.servers.drain(..) {
+            conn_tx_r.send(server).await?;
         }
-        trace!("connected all");
         Ok(self)
     }
 
     /// Sends an ECHO_REQ to the server, a good way to confirm the connection is alive
     ///
-    /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
+    /// Returns an error if there aren't any connected servers
+    ///
+    /// XXX: waits forever if an echo does not come back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let payload = payload.clone();
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
-        let conn: Arc<Mutex<ClientHandler>> = {
-            if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
-                conn.clone()
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No connections for echo!",
-                ));
-            }
-        };
-        send_packet(conn, packet).await?;
-        debug!("Waiting for echo response");
-        match self.echo_rx.recv().await {
-            Some(res) => info!("echo received: {:?}", res),
-            None => info!("echo channel closed"),
-        };
+        let mut conns = self.conns.lock().unwrap();
+        for (_, conn) in conns.iter_mut() {
+            send_packet(conn.clone(), packet.clone()).await?;
+            debug!("Waiting for echo response");
+            match self.echo_rx.recv().await {
+                Some(res) => info!("echo received: {:?}", res),
+                None => info!("echo channel closed"),
+            };
+        }
         Ok(())
     }
 
     /// Submits a foreground job. The see [ClientJob.response] for how to see the response from the
     /// worker.
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB, function, payload).await
+        self.direct_submit(SUBMIT_JOB, function, None, payload).await
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
@@ -389,18 +440,24 @@ impl Client {
         function: &str,
         payload: &[u8],
     ) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB_BG, function, payload).await
+        self.direct_submit(SUBMIT_JOB_BG, function, None, payload).await
     }
 
     async fn direct_submit(
         &mut self,
         ptype: u32,
         function: &str,
+        unique: Option<&str>,
         payload: &[u8],
     ) -> Result<ClientJob, io::Error> {
+        let unique = match unique {
+            None => format!("{}", Uuid::new_v4()),
+            Some(unique) => unique.to_string(),
+        };
         let conn = {
-            let mut conns = self.conns.lock().unwrap();
-            if let Some(conn) = conns.get_mut(0) {
+            let conns = self.conns.lock().unwrap();
+            let server = self.hash_ring.get(&unique).unwrap();
+            if let Some(conn) = conns.get(server) {
                 conn.clone()
             } else {
                 return Err(io::Error::new(
@@ -409,9 +466,7 @@ impl Client {
                 ));
             }
         };
-        /* Pick the conn later */
         let conn = conn.clone();
-        let unique = format!("{}", Uuid::new_v4());
         let mut data = BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
         data.extend(function.bytes());
         data.put_u8(b'\0');
@@ -435,20 +490,21 @@ impl Client {
     }
 
     /// Sends a GET_STATUS packet and then returns the STATUS_RES in a [JobStatus]
+    ///
+    /// Because this handle may exist on any server, we have to send to all servers
+    /// We will return the first known status we get back.
     pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
-        let conn: Arc<Mutex<ClientHandler>> = {
-            let mut conns = self.conns.lock().unwrap();
-            conns.get_mut(0).unwrap().clone()
-        };
+        let mut conns = self.conns.lock().unwrap();
         let mut payload = BytesMut::with_capacity(handle.len());
         payload.extend(handle);
         let status_req = new_req(GET_STATUS, payload.freeze());
-        send_packet(conn, status_req).await?;
-        if let Some(status_res) = self.status_res_rx.recv().await {
-            Ok(status_res)
-        } else {
-            Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
-        }
+        for (_, conn) in conns.iter_mut() {
+            send_packet(conn.clone(), status_req.clone()).await?;
+            if let Some(status_res) = self.status_res_rx.recv().await {
+                return Ok(status_res)
+            }
+        };
+        Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
     }
 
     /// Sends a CAN_DO on every connection and registers a callback for it
@@ -468,7 +524,7 @@ impl Client {
         let (tx, mut rx) = channel(100); // Some day we'll use this param right
         {
             let mut conns = self.conns.lock().unwrap();
-            for conn in conns.iter_mut() {
+            for (_, conn) in conns.iter_mut() {
                 {
                     let conn = conn.lock().unwrap();
                     let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
@@ -515,7 +571,7 @@ impl Client {
             let job = match job {
                 Err(TryRecvError::Empty) => {
                     let conns = self.conns.lock().unwrap();
-                    for conn in conns.iter() {
+                    for (_, conn) in conns.iter() {
                         let packet = new_req(GRAB_JOB, Bytes::new());
                         send_packet(conn.clone(), packet).await?;
                     }

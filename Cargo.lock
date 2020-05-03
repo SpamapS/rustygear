@@ -215,6 +215,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hashring"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c61597509cb0b981b509234cc4e09627efb589b229a50fee63f2609bdbb07e35"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -495,7 +504,7 @@ dependencies = [
  "bytes",
  "env_logger",
  "futures",
- "hash_ring",
+ "hashring",
  "log",
  "tokio",
  "tokio-util",
@@ -543,6 +552,12 @@ dependencies = [
  "arc-swap",
  "libc",
 ]
+
+[[package]]
+name = "siphasher"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 
 [[package]]
 name = "slab"

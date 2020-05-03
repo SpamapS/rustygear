@@ -28,6 +28,7 @@ pub enum PacketMagic {
     REQ,
     RES,
     TEXT,
+    EOF,
 }
 
 pub struct Packet {
@@ -67,6 +68,7 @@ impl fmt::Debug for Packet {
                 PacketMagic::REQ => "REQ",
                 PacketMagic::RES => "RES",
                 PacketMagic::TEXT => "TEXT",
+                PacketMagic::EOF => "EOF",
                 _ => "UNKNOWN",
             },
             ptype_str,
@@ -106,6 +108,7 @@ impl Packet {
     fn into_bytes(self) -> (Bytes, Bytes) {
         let magic = match self.magic {
             PacketMagic::UNKNOWN => panic!("Unknown packet magic cannot be sent"),
+            PacketMagic::EOF => panic!("Attempted to encode EOF"),
             PacketMagic::REQ => REQ,
             PacketMagic::RES => RES,
             PacketMagic::TEXT => return (Bytes::from_static(b""), self.data),
@@ -134,6 +137,15 @@ impl Decoder for PacketCodec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        if src.len() == 0 {
+            debug!("0 length buffer received, assuming disconnected");
+            return Ok(Some(Packet {
+                magic: PacketMagic::EOF,
+                ptype: ADMIN_RESPONSE,
+                psize: 0,
+                data: Bytes::new()
+            }))
+        }
         debug!("Decoding {:?}", src);
         // Peek at first 4
         // Is this a req/res
