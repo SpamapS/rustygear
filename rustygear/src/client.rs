@@ -24,7 +24,7 @@ use futures::sink::SinkExt;
 use futures::stream::StreamExt;
 use tokio::net::TcpStream;
 use tokio::runtime;
-use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::error::{TryRecvError, SendError};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::time::{delay_for, Duration};
 use tokio_util::codec::Decoder;
@@ -80,6 +80,7 @@ pub struct Client {
 }
 
 /// Each individual connection has one of these for handling packets
+#[derive(Debug)]
 struct ClientHandler {
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
@@ -299,6 +300,17 @@ impl Client {
         let error_tx = self.error_tx.clone();
         let worker_job_tx = self.worker_job_tx.clone();
         let conns = self.conns.clone();
+        let connected_tx: Arc<Mutex<HashMap<Hostname, Sender<()>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let mut connected_rx: HashMap<Hostname, Receiver<()>> = HashMap::new();
+        {
+            let mut connected_tx = connected_tx.lock().unwrap();
+            for server in self.servers.iter() {
+                let (tx, rx) = channel(5);
+                connected_tx.insert(server.clone(), tx);
+                connected_rx.insert(server.clone(), rx);
+            }
+        }
+        trace!("Spawning connect loop");
         runtime::Handle::current().spawn(async move {
             let mut backoffs: HashMap<Hostname, u64> = HashMap::new();
             while let Some(server) = conn_rx.recv().await {
@@ -333,6 +345,7 @@ impl Client {
                 let (mut sink, mut stream) = pc.framed(conn).split();
                 if let Some(ref client_id) = client_id {
                     let req = new_req(SET_CLIENT_ID, client_id.clone());
+                    trace!("Sending {:?}", req);
                     if let Err(e) = sink.send(req).await {
                         error!("Server ({}) send error: {}", server, e);
                         let mut conn_tx = conn_tx.clone();
@@ -355,7 +368,9 @@ impl Client {
                     worker_job_tx.clone(),
                 )));
                 let conns = conns.clone();
+                trace!("Unlocking conns and inserting handler for {}", server);
                 conns.lock().unwrap().insert(server.clone(), handler.clone());
+                trace!("Inserted handler for {}", server);
                 let mut conn_tx = conn_tx.clone();
                 let server = server.clone();
                 let server_w = server.clone();
@@ -384,6 +399,7 @@ impl Client {
                         }
                     }
                 };
+                let server_r = server_w.clone();
                 let server = server_w;
                 let mut conn_tx_w = conn_tx_w.clone();
                 let writer = async move {
@@ -396,13 +412,38 @@ impl Client {
                         }
                     }
                 };
+                trace!("{}: Spawning reader/writer", server_r);
                 runtime::Handle::current().spawn(reader);
                 runtime::Handle::current().spawn(writer);
+                trace!("{}: Spawned reader/writer", server_r);
+                let mut tx = {
+                    let mut connected_tx = connected_tx.lock().unwrap();
+                    match connected_tx.get_mut(&server_r) {
+                        Some(tx) => tx.clone(),
+                        None => continue
+                    }
+                };
+                match tx.send(()).await {
+                    Ok(_) => debug!("Sent connected signal"),
+                    Err(SendError(_)) => debug!("Receiver already dropped"),
+                };
             }
         });
+        trace!("Spawned connect loop");
         // We don't need this list to stay intact since we'll never reference it again
         for server in self.servers.drain(..) {
-            conn_tx_r.send(server).await?;
+            conn_tx_r.send(server.clone()).await?;
+            if let Some(rx) = connected_rx.get_mut(&server) {
+                // Block until it has happened
+                debug!("Waiting for {} to connect", server);
+                if rx.recv().await.is_none() {
+                    debug!("Senders for {} dropped.", server);
+                } else {
+                    debug!("{} connected", server);
+                }
+            } else {
+                debug!("No conn block for {}", server);
+            }
         }
         Ok(self)
     }
@@ -455,6 +496,7 @@ impl Client {
             Some(unique) => unique.to_string(),
         };
         let conn = {
+            trace!("direct_submit: Locking {:?}", self.conns);
             let conns = self.conns.lock().unwrap();
             let server = self.hash_ring.get(&unique).unwrap();
             if let Some(conn) = conns.get(server) {
@@ -523,6 +565,7 @@ impl Client {
     {
         let (tx, mut rx) = channel(100); // Some day we'll use this param right
         {
+            trace!("can_do: locking conns");
             let mut conns = self.conns.lock().unwrap();
             for (_, conn) in conns.iter_mut() {
                 {
@@ -538,6 +581,7 @@ impl Client {
                 let can_do = new_req(CAN_DO, payload.freeze());
                 send_packet(conn.clone(), can_do).await?;
             }
+            trace!("can_do: unlocking conns");
         }
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
@@ -570,10 +614,12 @@ impl Client {
             let job = self.worker_job_rx.try_recv();
             let job = match job {
                 Err(TryRecvError::Empty) => {
-                    let conns = self.conns.lock().unwrap();
-                    for (_, conn) in conns.iter() {
-                        let packet = new_req(GRAB_JOB, Bytes::new());
-                        send_packet(conn.clone(), packet).await?;
+                    {
+                        let conns = self.conns.lock().unwrap();
+                        for (_, conn) in conns.iter() {
+                            let packet = new_req(GRAB_JOB, Bytes::new());
+                            send_packet(conn.clone(), packet).await?;
+                        }
                     }
                     match self.worker_job_rx.recv().await {
                         Some(job) => job,

@@ -206,15 +206,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hash_ring"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0fc3c756a7316355185d6d75a1683497c688ceb74d70f5e36e533fca164bc64"
-dependencies = [
- "md5",
-]
-
-[[package]]
 name = "hashring"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,12 +271,6 @@ checksum = "14b6052be84e6b71ab17edffc2eeabf5c2c3ae1fdb464aae35ac50c67a44e1f7"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "md5"
-version = "0.3.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79c56d6a0b07f9e19282511c83fc5b086364cbae4ba8c7d5f190c3d9b0425a48"
 
 [[package]]
 name = "memchr"
@@ -512,22 +497,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustygear"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c50e047d1ef9f8418c2c8e572cc413caf435e8612f2237f7150d10aef253169c"
-dependencies = [
- "bytes",
- "env_logger",
- "futures",
- "hash_ring",
- "log",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
 name = "rustygeard"
 version = "0.8.0"
 dependencies = [
@@ -536,7 +505,7 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
- "rustygear 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustygear",
  "tokio",
  "tokio-util",
  "tower-service",

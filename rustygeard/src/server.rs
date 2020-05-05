@@ -13,7 +13,7 @@ use tokio::sync::mpsc::channel;
 use tokio_util::codec::Decoder;
 use tower_service::Service;
 
-use rustygear::codec::{Packet, PacketCodec};
+use rustygear::codec::{Packet, PacketCodec, PacketMagic};
 
 use crate::queues::{HandleJobStorage, SharedJobStorage};
 use crate::service::GearmanService;
@@ -74,10 +74,16 @@ impl GearmanServer {
                             }
                             let mut tx = tx.clone();
                             while let Some(frame) = stream.next().await {
-                                let response = service.call(frame.unwrap()).await;
-                                if let Ok(response) = response {
-                                    if let Err(_) = tx.send(response).await {
-                                        error!("receiver dropped!")
+                                let frame = frame.unwrap();
+                                if frame.magic == PacketMagic::EOF {
+                                    info!("Connection dropped: conn_id={} peer_addr={}", conn_id, peer_addr);
+                                    break
+                                } else {
+                                    let response = service.call(frame).await;
+                                    if let Ok(response) = response {
+                                        if let Err(_) = tx.send(response).await {
+                                            error!("receiver dropped!")
+                                        }
                                     }
                                 }
                             }

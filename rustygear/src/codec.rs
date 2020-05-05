@@ -136,16 +136,19 @@ impl Decoder for PacketCodec {
     type Item = Packet;
     type Error = io::Error;
 
-    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
-        if src.len() == 0 {
-            debug!("0 length buffer received, assuming disconnected");
-            return Ok(Some(Packet {
-                magic: PacketMagic::EOF,
-                ptype: ADMIN_RESPONSE,
-                psize: 0,
-                data: Bytes::new()
-            }))
+    fn decode_eof(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
+        if src.len() > 0 {
+            return self.decode(src)
         }
+        Ok(Some(Packet {
+            magic: PacketMagic::EOF,
+            ptype: ADMIN_RESPONSE,
+            psize: 0,
+            data: Bytes::new()
+        }))
+    }
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, io::Error> {
         debug!("Decoding {:?}", src);
         // Peek at first 4
         // Is this a req/res
