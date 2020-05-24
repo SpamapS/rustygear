@@ -378,7 +378,7 @@ impl Client {
                     let mut tx = tx.clone();
                     while let Some(Ok(frame)) = stream.next().await {
                         if frame.magic == PacketMagic::EOF {
-                            info!("disconnected, reconnecting");
+                            info!("Disconnected from {}, reconnecting", server);
                             conn_tx.send(server).await.unwrap();
                             return
                         }
@@ -424,8 +424,8 @@ impl Client {
                     }
                 };
                 match tx.send(()).await {
-                    Ok(_) => debug!("Sent connected signal"),
-                    Err(SendError(_)) => debug!("Receiver already dropped"),
+                    Ok(_) => debug!("Connected {}", server_r),
+                    Err(SendError(_)) => debug!("Reconnected {}", server_r),
                 };
             }
         });
