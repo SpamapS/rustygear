@@ -314,6 +314,7 @@ impl Client {
         runtime::Handle::current().spawn(async move {
             let mut backoffs: HashMap<Hostname, u64> = HashMap::new();
             while let Some(server) = conn_rx.recv().await {
+                let server_c = server.clone();
                 let addr = server.parse::<SocketAddr>().unwrap();
                 trace!("really connecting: server={} addr={:?}", server, addr);
                 let conn = match TcpStream::connect(addr).await {
@@ -353,6 +354,29 @@ impl Client {
                         continue
                     }
                 }
+                let mut can_do_keys: Vec<Vec<u8>> = {
+                    let jobs_tx_by_func = jobs_tx_by_func.lock().unwrap();
+                    if jobs_tx_by_func.len() > 0 {
+                        jobs_tx_by_func.keys().map(|k| k.clone()).collect()
+                    } else {
+                        Vec::new()
+                    }
+                };
+                let mut failed = false;
+                for key in can_do_keys.drain(0..) {
+                    let req = new_req(CAN_DO, Bytes::from(key));
+                    if let Err(e) = sink.send(req).await {
+                        error!("Server ({}) send error: {}", server, e);
+                        let mut conn_tx = conn_tx.clone();
+                        // This will reconnect
+                        conn_tx.send(server_c).await.expect("Connection thread failed");
+                        failed = true;
+                        break
+                    }
+                };
+                if failed {
+                    continue; // oops we failed, run through loop again
+                };
                 let (tx, mut rx) = channel(100); // XXX pick a good value or const
                 let tx = tx.clone();
                 let tx2 = tx.clone();
