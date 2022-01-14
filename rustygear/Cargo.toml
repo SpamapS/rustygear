@@ -9,7 +9,7 @@ edition = "2018"
 keywords = ["gearman", "client"]
 
 [dependencies]
-bytes = ">=0.5.0"
+bytes = ">=1.1.0"
 hash_ring = ">=0.1.7"
 log = ">=0.4.8"
 env_logger = ">=0.7.1"
