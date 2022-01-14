@@ -337,7 +337,7 @@ impl Client {
                 }
             };
             let writer = async move {
-                while let Some(packet) = rx.next().await {
+                while let Some(packet) = rx.recv().await {
                     trace!("Sending {:?}", &packet);
                     if let Err(_) = sink.send(packet).await {
                         error!("Connection ({}) dropped", offset);
@@ -529,7 +529,7 @@ impl Client {
                         }
                     }
                 }
-                Err(TryRecvError::Closed) => {
+                Err(TryRecvError::Disconnected) => {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         "Worker job tx are all dropped",
