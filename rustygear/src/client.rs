@@ -15,7 +15,7 @@
 */
 use std::collections::HashMap;
 use std::io;
-use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::sync::{Arc, Mutex};
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -276,7 +276,7 @@ impl Client {
         for is_conn in self.connected.iter() {
             if !is_conn {
                 let server: &str = self.servers.get(i).unwrap();
-                let addr = server.parse::<SocketAddr>()?;
+                let addr = server.to_socket_addrs().unwrap().next().unwrap();
                 trace!("really connecting: i={} addr={:?}", i, addr);
                 connects.push(
                     runtime::Handle::current()
