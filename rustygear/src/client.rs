@@ -220,7 +220,7 @@ impl WorkerJob {
         payload.extend(self.handle.clone());
         payload.put_u8(b'\0');
         payload.extend(response);
-        let packet = new_res(WORK_COMPLETE, payload.freeze());
+        let packet = new_req(WORK_COMPLETE, payload.freeze());
         self.send_packet(packet).await
     }
 }
