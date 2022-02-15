@@ -25,6 +25,7 @@ use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::task;
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
@@ -483,20 +484,26 @@ impl Client {
                 send_packet(conn.clone(), can_do).await?;
             }
         }
+        let func_arc = Arc::new(Mutex::new(func));        
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
-                match func(&mut job) {
-                    Err(_) => {
-                        if let Err(e) = job.work_fail().await {
-                            warn!("Failed to send WORK_FAIL {}", e);
+                let func_clone = func_arc.clone();
+                task::spawn_blocking(move || {
+                    let rt  = tokio::runtime::Builder::new_current_thread().build().unwrap();
+                    let res = func_clone.lock().unwrap()(&mut job);
+                    match res {
+                        Err(_) => {
+                            if let Err(e) = rt.block_on(job.work_fail()) {
+                                warn!("Failed to send WORK_FAIL {}", e);
+                            }
                         }
-                    }
-                    Ok(response) => {
-                        if let Err(e) = job.work_complete(response).await {
-                            warn!("Failed to send WORK_COMPLETE {}", e);
+                        Ok(response) => {
+                            if let Err(e) = rt.block_on(job.work_complete(response)) {
+                                warn!("Failed to send WORK_COMPLETE {}", e);
+                            }
                         }
-                    }
-                }
+                    };
+                }).await.unwrap();
             }
         });
         Ok(self)
