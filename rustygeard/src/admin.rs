@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 
 use rustygear::codec::Packet;
 
@@ -52,4 +52,8 @@ pub fn admin_command_workers(workers: WorkersByConnId) -> Packet {
     response.extend(b".\n");
     let response = response.freeze();
     Packet::new_text_res(response)
+}
+
+pub fn admin_command_unknown() -> Packet {
+    Packet::new_text_res(Bytes::from_static(b"ERR UNKNOWN_COMMAND Unknown+server+command\n"))
 }

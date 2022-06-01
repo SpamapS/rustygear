@@ -11,7 +11,7 @@ use bytes::Bytes;
 use rustygear::constants::*;
 use rustygear::job::Job;
 
-use rustygeard::admin::{admin_command_status, admin_command_workers};
+use rustygeard::admin::{admin_command_status, admin_command_unknown, admin_command_workers};
 use rustygeard::queues::{HandleJobStorage, SharedJobStorage};
 use rustygeard::worker::{SharedWorkers, Wake, Worker};
 use rustygeard::service::WorkersByConnId;
@@ -66,5 +66,13 @@ fn admin_command_workers_with2() {
     let packet = admin_command_workers(workers_by_conn_id);
     let response = String::from_utf8(packet.data.to_vec()).unwrap();
     let expected = String::from("10 127.0.0.1:37337 hacker1 : hack\n11 127.0.0.1:33333 - :\n.\n");
+    assert_eq!(expected, response);
+}
+
+#[test]
+fn admin_command_unknown_t() {
+    let packet = admin_command_unknown();
+    let response = String::from_utf8(packet.data.to_vec()).unwrap();
+    let expected = String::from("ERR UNKNOWN_COMMAND Unknown+server+command\n");
     assert_eq!(expected, response);
 }
