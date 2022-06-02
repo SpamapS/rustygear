@@ -11,7 +11,7 @@ use bytes::Bytes;
 use rustygear::constants::*;
 use rustygear::job::Job;
 
-use rustygeard::admin::{admin_command_status, admin_command_unknown, admin_command_workers};
+use rustygeard::admin::{admin_command_status, admin_command_unknown, admin_command_workers, admin_command_priority_status};
 use rustygeard::queues::{HandleJobStorage, SharedJobStorage};
 use rustygeard::worker::{SharedWorkers, Wake, Worker};
 use rustygeard::service::WorkersByConnId;
@@ -67,6 +67,36 @@ fn admin_command_workers_with2() {
     let response = String::from_utf8(packet.data.to_vec()).unwrap();
     let expected = String::from("10 127.0.0.1:37337 hacker1 : hack\n11 127.0.0.1:33333 - :\n.\n");
     assert_eq!(expected, response);
+}
+
+#[test]
+fn admin_command_priority_status_empty() {
+    let storage = SharedJobStorage::new_job_storage();
+    let workers = SharedWorkers::new_workers();
+    let packet = admin_command_priority_status(storage, workers);
+    assert_eq!(b".\n", &packet.data[..]);
+}
+
+#[test]
+fn admin_command_priority_status_priority_jobs() {
+    let mut storage = SharedJobStorage::new_job_storage();
+    for priority in vec![PRIORITY_LOW, PRIORITY_NORMAL, PRIORITY_HIGH] {
+        for i in 0..2 {
+            let job = Job::new(
+                Bytes::from("func"),
+                Bytes::from(format!("unique{}", i)),
+                Bytes::new(),
+                Bytes::from(format!("H:localhost:{}", i)),
+            );
+            storage.add_job(Arc::new(job), priority, None);
+        }
+    }
+    let mut w = Worker::new("127.0.0.1:37337".parse().unwrap(), Bytes::from("client1"));
+    w.can_do(Bytes::from("func"));
+    let mut workers = SharedWorkers::new_workers();
+    workers.sleep(&mut w, 1);
+    let packet = admin_command_priority_status(storage, workers);
+    assert_eq!("func\t2\t2\t2\t1\n.\n", String::from_utf8(packet.data[..].to_vec()).unwrap())
 }
 
 #[test]

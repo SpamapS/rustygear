@@ -10,7 +10,9 @@ use futures::SinkExt;
 use tokio::net::TcpListener;
 use tokio::runtime;
 use tokio::sync::mpsc::channel;
-use tokio_util::codec::Decoder;
+use tokio_util::codec::
+
+Decoder;
 use tower_service::Service;
 
 use rustygear::codec::{Packet, PacketCodec};
@@ -31,15 +33,14 @@ impl GearmanServer {
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let workers_by_conn_id = Arc::new(Mutex::new(BTreeMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
-        let mut rt = runtime::Runtime::new().unwrap();
+        let rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let mut listener = TcpListener::bind(&addr).await.unwrap();
-            let mut incoming = listener.incoming();
-            while let Some(socket_res) = incoming.next().await {
+            let listener = TcpListener::bind(&addr).await.unwrap();
+            loop {
+                let socket_res = listener.accept().await;
                 match socket_res {
-                    Ok(sock) => {
+                    Ok((sock, peer_addr)) => {
                         let conn_id: usize = sock.as_raw_fd().try_into().unwrap();
-                        let peer_addr = sock.peer_addr().unwrap_or("0.0.0.0:0".parse().unwrap());
                         let pc = PacketCodec {};
                         let (mut sink, mut stream) = pc.framed(sock).split();
                         let (tx, mut rx) = channel::<Packet>(MAX_UNHANDLED_OUT_FRAMES);
@@ -72,7 +73,7 @@ impl GearmanServer {
                                 let mut workers_by_conn_id = workers_by_conn_id.lock().unwrap();
                                 workers_by_conn_id.insert(conn_id, service.worker.clone());
                             }
-                            let mut tx = tx.clone();
+                            let tx = tx.clone();
                             while let Some(frame) = stream.next().await {
                                 let response = service.call(frame.unwrap()).await;
                                 if let Ok(response) = response {
@@ -84,7 +85,7 @@ impl GearmanServer {
                         };
 
                         let writer = async move {
-                            while let Some(packet) = rx.next().await {
+                            while let Some(packet) = rx.recv().await {
                                 trace!("Sending {:?}", &packet);
                                 if let Err(_) = sink.send(packet).await {
                                     {

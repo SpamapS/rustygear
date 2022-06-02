@@ -73,6 +73,10 @@ impl GearmanService {
             ADMIN_WORKERS => Ok(admin::admin_command_workers(
                 self.workers_by_conn_id.clone())
             ),
+            ADMIN_PRIORITYSTATUS => Ok(admin::admin_command_priority_status(
+                self.queues.clone(),
+                self.workers.clone())
+            ),
             ADMIN_UNKNOWN => Ok(admin::admin_command_unknown()
             ),
             _ => panic!(
@@ -89,7 +93,7 @@ impl GearmanService {
                 panic!("No connection found for conn_id = {}", &conn_id); // XXX You can do better
             }
             Some(tx) => {
-                let mut tx = tx.clone();
+                let tx = tx.clone();
                 runtime::Handle::current().spawn(async move {
                     if let Err(e) = tx.send(packet).await {
                         error!("Send Error! {:?}", e);
@@ -249,7 +253,7 @@ impl GearmanService {
                                 debug!("No connection found to wake up for conn_id = {}", wake);
                             }
                             Some(tx) => {
-                                let mut tx = tx.clone();
+                                let tx = tx.clone();
                                 runtime::Handle::current().spawn(async move {
                                     if let Err(_) = tx.send(new_noop()).await {
                                         error!("worker receiver dropped");
@@ -385,7 +389,7 @@ impl Service<Packet> for GearmanService {
     fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{}:{:?}] Got a req {:?}", self.conn_id, self.worker.lock().unwrap().client_id, req);
         let res = match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_UNKNOWN => self.response_from_packet(&req),
+            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN => self.response_from_packet(&req),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
             SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
             SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),
