@@ -133,7 +133,7 @@ pub enum WorkUpdate {
 }
 
 async fn send_packet(conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<(), io::Error> {
-    let mut sink_tx = conn.lock().unwrap().sink_tx.clone();
+    let sink_tx = conn.lock().unwrap().sink_tx.clone();
     if let Err(e) = sink_tx.send(packet).await {
         error!("Receiver dropped");
         return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
@@ -318,7 +318,7 @@ impl Client {
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
             let reader = async move {
-                let mut tx = tx.clone();
+                let tx = tx.clone();
                 while let Some(frame) = stream.next().await {
                     trace!("Frame read: {:?}", frame);
                     let response = {
@@ -462,7 +462,7 @@ impl Client {
     ///
     /// See examples/worker.rs for more information.
     ///
-    pub async fn can_do<F>(self, function: &str, mut func: F) -> Result<Self, io::Error>
+    pub async fn can_do<F>(self, function: &str, func: F) -> Result<Self, io::Error>
     where
         F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
     {
@@ -631,7 +631,7 @@ impl ClientHandler {
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Echo response received: {:?}", req.data);
-        let mut tx = self.echo_tx.clone();
+        let tx = self.echo_tx.clone();
         let data = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(data).await });
         Ok(no_response())
@@ -639,7 +639,7 @@ impl ClientHandler {
 
     fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Job Created: {:?}", req);
-        let mut tx = self.job_created_tx.clone();
+        let tx = self.job_created_tx.clone();
         let handle = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(handle).await });
         Ok(no_response())
@@ -649,7 +649,7 @@ impl ClientHandler {
         let mut data = req.data.clone();
         let code = next_field(&mut data);
         let text = next_field(&mut data);
-        let mut tx = self.error_tx.clone();
+        let tx = self.error_tx.clone();
         runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
         Ok(no_response())
     }
@@ -676,7 +676,7 @@ impl ClientHandler {
                 .parse()
                 .unwrap();
         }
-        let mut tx = self.status_res_tx.clone();
+        let tx = self.status_res_tx.clone();
         runtime::Handle::current().spawn(async move { tx.send(js).await });
         Ok(no_response())
     }
@@ -734,7 +734,7 @@ impl ClientHandler {
         };
         let senders_by_handle = self.senders_by_handle.lock().unwrap();
         if let Some(tx) = senders_by_handle.get(&handle) {
-            let mut tx = tx.clone();
+            let tx = tx.clone();
             runtime::Handle::current().spawn(async move { tx.send(work_update).await });
         } else {
             error!("Received work for unknown job: {:?}", handle);
@@ -753,7 +753,7 @@ impl ClientHandler {
             payload: payload,
             sink_tx: self.sink_tx.clone(),
         };
-        let mut tx = self.worker_job_tx.clone();
+        let tx = self.worker_job_tx.clone();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
         Ok(no_response())
     }

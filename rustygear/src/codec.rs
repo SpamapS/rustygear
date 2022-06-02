@@ -91,6 +91,7 @@ impl Packet {
                 "version" => ADMIN_VERSION,
                 "status" => ADMIN_STATUS,
                 "workers" => ADMIN_WORKERS,
+                "prioritystatus" => ADMIN_PRIORITYSTATUS,
                 _ => ADMIN_UNKNOWN,
             };
             return Ok(Some(Packet {
