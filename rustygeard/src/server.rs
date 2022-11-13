@@ -1,15 +1,19 @@
 use std::collections::{HashMap, BTreeMap};
 use std::convert::TryInto;
 use std::net::SocketAddr;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::os::unix::io::AsRawFd;
 
+use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use tokio::net::TcpListener;
+use rustygear::constants::{ADMIN_UNKNOWN, NOOP};
+use rustygear::util::new_req;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
 use tokio::sync::mpsc::channel;
+
 use tokio_util::codec::
 
 Decoder;
@@ -24,6 +28,7 @@ use crate::worker::{SharedWorkers, Wake};
 pub struct GearmanServer;
 
 const MAX_UNHANDLED_OUT_FRAMES: usize = 1024;
+const SHUTDOWN_BUFFER_SIZE: usize = 4;
 
 impl GearmanServer {
     pub fn run(addr: SocketAddr) {
@@ -36,7 +41,12 @@ impl GearmanServer {
         let rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
             let listener = TcpListener::bind(&addr).await.unwrap();
+            let shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
             loop {
+                let shutdown = shutdown.clone();
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
                 let socket_res = listener.accept().await;
                 match socket_res {
                     Ok((sock, peer_addr)) => {
@@ -52,12 +62,16 @@ impl GearmanServer {
                         // Read stuff, write if needed
                         let senders_by_conn_id = senders_by_conn_id.clone();
                         let workers_by_conn_id = workers_by_conn_id.clone();
+                        let senders_by_conn_id_r = senders_by_conn_id.clone();
+                        let workers_by_conn_id_r = workers_by_conn_id.clone();
                         let senders_by_conn_id_w = senders_by_conn_id.clone();
                         let workers_by_conn_id_w = workers_by_conn_id.clone();
                         let queues = queues.clone();
                         let workers = workers.clone();
                         let job_count = job_count.clone();
                         let job_waiters = job_waiters.clone();
+                        let (shut_tx, mut shut_rx) = channel(SHUTDOWN_BUFFER_SIZE);
+                        let reader_tx = tx.clone();
                         let reader = async move {
                             let mut service = GearmanService::new(
                                 conn_id,
@@ -68,40 +82,70 @@ impl GearmanServer {
                                 workers_by_conn_id.clone(),
                                 job_waiters,
                                 peer_addr,
+                                shut_tx,
                             );
                             {
                                 let mut workers_by_conn_id = workers_by_conn_id.lock().unwrap();
                                 workers_by_conn_id.insert(conn_id, service.worker.clone());
                             }
-                            let tx = tx.clone();
                             while let Some(frame) = stream.next().await {
                                 let response = service.call(frame.unwrap()).await;
                                 if let Ok(response) = response {
-                                    if let Err(_) = tx.send(response).await {
-                                        error!("receiver dropped!")
+                                    if let Err(_) = reader_tx.send(response).await {
+                                        error!("receiver dropped!");
+                                        break;
                                     }
                                 }
                             }
+                            info!("Reader for ({}) shutting down.", conn_id);
+                            {
+                                let mut senders_by_conn_id = senders_by_conn_id_r.lock().unwrap();
+                                senders_by_conn_id.remove(&conn_id);
+                            }
+                            {
+                                let mut workers_by_conn_id = workers_by_conn_id_r.lock().unwrap();
+                                workers_by_conn_id.remove(&conn_id);
+                            }
+                            reader_tx.send(new_req(NOOP, Bytes::new())).await.unwrap();
+                            drop(reader_tx);
+                            drop(service);
                         };
-
+                        let writer_shutdown = shutdown.clone();
                         let writer = async move {
                             while let Some(packet) = rx.recv().await {
                                 trace!("Sending {:?}", &packet);
                                 if let Err(_) = sink.send(packet).await {
-                                    {
-                                        let mut workers_by_conn_id = workers_by_conn_id_w.lock().unwrap();
-                                        workers_by_conn_id.remove(&conn_id);
-                                    }
-                                    {
-                                        let mut senders_by_conn_id = senders_by_conn_id_w.lock().unwrap();
-                                        senders_by_conn_id.remove(&conn_id);
-                                    }
-                                    error!("Connection ({}) dropped", conn_id);
+                                    info!("Connection ({}) dropped", conn_id);
+                                    break;
                                 }
+                                let shutdown = writer_shutdown.clone();
+                                if shutdown.load(Ordering::Relaxed) {
+                                    break;
+                                }
+                            }
+                            debug!("Writer for ({}) shutting down", conn_id);
+                            {
+                                let mut workers_by_conn_id = workers_by_conn_id_w.lock().unwrap();
+                                workers_by_conn_id.remove(&conn_id);
+                            }
+                            {
+                                let mut senders_by_conn_id = senders_by_conn_id_w.lock().unwrap();
+                                senders_by_conn_id.remove(&conn_id);
+                            }
+                        };
+
+                        let shutterdown = async move {
+                            while shut_rx.recv().await.is_some() {
+                                let shutdown = shutdown.clone();
+                                shutdown.store(true, Ordering::Relaxed);
+                                // In case there's no incoming conns, force the listener to fire
+                                let _ = TcpStream::connect(&addr).await;
                             }
                         };
                         runtime::Handle::current().spawn(reader);
                         runtime::Handle::current().spawn(writer);
+                        runtime::Handle::current().spawn(shutterdown);
+                        drop(tx);
                     }
                     Err(e) => {
                         error!("{}", e);

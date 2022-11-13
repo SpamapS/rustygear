@@ -3,18 +3,21 @@ extern crate futures;
 extern crate rustygear;
 extern crate rustygeard;
 
+use std::collections::{BTreeMap, HashMap};
+use std::net::{SocketAddr, SocketAddrV6};
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
-use std::collections::BTreeMap;
 
 use bytes::Bytes;
+use tokio::sync::mpsc::channel;
 
 use rustygear::constants::*;
 use rustygear::job::Job;
 
-use rustygeard::admin::{admin_command_status, admin_command_unknown, admin_command_workers, admin_command_priority_status};
+use rustygeard::admin::*;
 use rustygeard::queues::{HandleJobStorage, SharedJobStorage};
+use rustygeard::service::{GearmanService, WorkersByConnId};
 use rustygeard::worker::{SharedWorkers, Wake, Worker};
-use rustygeard::service::WorkersByConnId;
 
 #[test]
 fn admin_command_status_1job() {
@@ -54,13 +57,19 @@ fn admin_command_workers_with2() {
     let workers_by_conn_id: WorkersByConnId = Arc::new(Mutex::new(BTreeMap::new()));
     {
         let mut wbci = workers_by_conn_id.lock().unwrap();
-        let worker = Arc::new(Mutex::new(Worker::new("127.0.0.1:37337".parse().unwrap(), Bytes::from("hacker1"))));
+        let worker = Arc::new(Mutex::new(Worker::new(
+            "127.0.0.1:37337".parse().unwrap(),
+            Bytes::from("hacker1"),
+        )));
         {
             let mut worker = worker.lock().unwrap();
             worker.can_do(Bytes::from("hack"));
         }
         wbci.insert(10, worker);
-        let worker = Arc::new(Mutex::new(Worker::new("127.0.0.1:33333".parse().unwrap(), Bytes::from("-"))));
+        let worker = Arc::new(Mutex::new(Worker::new(
+            "127.0.0.1:33333".parse().unwrap(),
+            Bytes::from("-"),
+        )));
         wbci.insert(11, worker);
     }
     let packet = admin_command_workers(workers_by_conn_id);
@@ -96,7 +105,10 @@ fn admin_command_priority_status_priority_jobs() {
     let mut workers = SharedWorkers::new_workers();
     workers.sleep(&mut w, 1);
     let packet = admin_command_priority_status(storage, workers);
-    assert_eq!("func\t2\t2\t2\t1\n.\n", String::from_utf8(packet.data[..].to_vec()).unwrap())
+    assert_eq!(
+        "func\t2\t2\t2\t1\n.\n",
+        String::from_utf8(packet.data[..].to_vec()).unwrap()
+    )
 }
 
 #[test]
@@ -104,5 +116,34 @@ fn admin_command_unknown_t() {
     let packet = admin_command_unknown();
     let response = String::from_utf8(packet.data.to_vec()).unwrap();
     let expected = String::from("ERR UNKNOWN_COMMAND Unknown+server+command\n");
+    assert_eq!(expected, response);
+}
+
+#[tokio::test]
+async fn admin_command_shutdown_t() {
+    let queues = SharedJobStorage::new_job_storage();
+    let workers = SharedWorkers::new_workers();
+    let job_count = Arc::new(AtomicUsize::new(0));
+    let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
+    let workers_by_conn_id = Arc::new(Mutex::new(BTreeMap::new()));
+    let job_waiters = Arc::new(Mutex::new(HashMap::new()));
+    let service_addr: SocketAddrV6 = "[::1]:10000".parse().unwrap();
+    let peer_addr: SocketAddrV6 = "[::1]:11000".parse().unwrap();
+    let (shut_tx, mut shut_rx) = channel(4);
+    let service = GearmanService::new(
+        1,
+        queues,
+        workers,
+        job_count,
+        senders_by_conn_id,
+        workers_by_conn_id,
+        job_waiters,
+        service_addr.into(),
+        shut_tx,
+    );
+    let packet = admin_command_shutdown(&service, &peer_addr.into());
+    let response = String::from_utf8(packet.data.to_vec()).unwrap();
+    let expected = String::from("BYE\n");
+    assert!(shut_rx.recv().await.is_some());
     assert_eq!(expected, response);
 }

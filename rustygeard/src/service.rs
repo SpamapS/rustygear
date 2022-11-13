@@ -41,6 +41,8 @@ pub struct GearmanService {
     senders_by_conn_id: SendersByConnId,
     workers_by_conn_id: WorkersByConnId,
     job_waiters: JobWaiters,
+    shut_tx: Sender<()>,
+    peer_addr: SocketAddr,
 }
 
 impl Drop for GearmanService {
@@ -65,7 +67,7 @@ impl GearmanService {
                     psize: resp_str.len() as u32,
                     data: resp_body.freeze(),
                 })
-            }
+            },
             ADMIN_STATUS => Ok(admin::admin_command_status(
                 self.queues.clone(),
                 self.workers.clone(),
@@ -78,6 +80,8 @@ impl GearmanService {
                 self.workers.clone())
             ),
             ADMIN_UNKNOWN => Ok(admin::admin_command_unknown()
+            ),
+            ADMIN_SHUTDOWN => Ok(admin::admin_command_shutdown(self, &self.peer_addr)
             ),
             _ => panic!(
                 "response_from_packet called with invalid ptype: {}",
@@ -112,6 +116,7 @@ impl GearmanService {
         workers_by_conn_id: WorkersByConnId,
         job_waiters: JobWaiters,
         peer_addr: SocketAddr,
+        shut_tx: Sender<()>,
     ) -> GearmanService {
         GearmanService {
             conn_id: conn_id,
@@ -122,6 +127,8 @@ impl GearmanService {
             senders_by_conn_id: senders_by_conn_id,
             workers_by_conn_id: workers_by_conn_id,
             job_waiters: job_waiters,
+            shut_tx: shut_tx,
+            peer_addr: peer_addr,
         }
     }
 
@@ -373,6 +380,18 @@ impl GearmanService {
         data.extend(format!("{}", denominator).into_bytes());
         Ok(new_res(STATUS_RES, data.freeze()))
     }
+
+    pub fn shutdown_service(&self) {
+        let shut_tx = self.shut_tx.clone();
+        // The main server process may already be shutting down, we just don't know
+        // So while we could likely tell the user that if we plumb this through async,
+        // It doesn't seem to have enough value to justify that.
+        runtime::Handle::current().spawn(async move {
+            if let Err(e) = shut_tx.send(()).await {
+                error!("Send Error! {:?}", e);
+            }
+        });
+    }
 }
 
 impl Service<Packet> for GearmanService {
@@ -389,7 +408,7 @@ impl Service<Packet> for GearmanService {
     fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{}:{:?}] Got a req {:?}", self.conn_id, self.worker.lock().unwrap().client_id, req);
         let res = match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN => self.response_from_packet(&req),
+            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN | ADMIN_SHUTDOWN => self.response_from_packet(&req),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
             SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
             SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),

@@ -383,23 +383,7 @@ checksum = "49b3de9ec5dc0a3417da371aab17d729997c15010e7fd24ff707773a33bddb64"
 
 [[package]]
 name = "rustygear"
-version = "0.9.0"
-dependencies = [
- "bytes",
- "env_logger",
- "futures",
- "hash_ring",
- "log",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
-name = "rustygear"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "887988a760b9eb3dfa0336cbd5d4cb054050fae79a70cf27850575566049e93e"
+version = "0.10.0"
 dependencies = [
  "bytes",
  "env_logger",
@@ -413,14 +397,15 @@ dependencies = [
 
 [[package]]
 name = "rustygeard"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bytes",
  "clap",
  "env_logger",
  "futures",
+ "futures-sink",
  "log",
- "rustygear 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustygear",
  "tokio",
  "tokio-util",
  "tower-service",

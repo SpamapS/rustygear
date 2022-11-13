@@ -62,6 +62,7 @@ pub const ADMIN_VERSION: u32 = 10002;
 pub const ADMIN_RESPONSE: u32 = 10003;
 pub const ADMIN_WORKERS: u32 = 10004;
 pub const ADMIN_PRIORITYSTATUS: u32 = 10005;
+pub const ADMIN_SHUTDOWN: u32 = 10006;
 
 pub const REQ: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'Q' as u8];
 pub const RES: [u8; 4] = [0x00u8, 'R' as u8, 'E' as u8, 'S' as u8];
