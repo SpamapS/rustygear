@@ -8,7 +8,7 @@ use std::os::unix::io::AsRawFd;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use rustygear::constants::{ADMIN_UNKNOWN, NOOP};
+use rustygear::constants::{NOOP};
 use rustygear::util::new_req;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
