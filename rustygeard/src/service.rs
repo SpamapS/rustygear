@@ -79,8 +79,9 @@ impl GearmanService {
                 self.queues.clone(),
                 self.workers.clone())
             ),
-            ADMIN_SHUTDOWN => Ok(admin::admin_command_shutdown(self, &self.peer_addr)),
             ADMIN_UNKNOWN => Ok(admin::admin_command_unknown()
+            ),
+            ADMIN_SHUTDOWN => Ok(admin::admin_command_shutdown(self, &self.peer_addr)
             ),
             _ => panic!(
                 "response_from_packet called with invalid ptype: {}",
@@ -407,7 +408,7 @@ impl Service<Packet> for GearmanService {
     fn call(&mut self, req: Packet) -> Self::Future {
         debug!("[{}:{:?}] Got a req {:?}", self.conn_id, self.worker.lock().unwrap().client_id, req);
         let res = match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN => self.response_from_packet(&req),
+            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN | ADMIN_SHUTDOWN => self.response_from_packet(&req),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
             SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
             SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),

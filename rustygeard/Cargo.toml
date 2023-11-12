@@ -10,7 +10,7 @@ homepage = "https://github.com/SpamapS/rustygear"
 
 [dependencies]
 bytes = ">=1.1.0"
-rustygear = ">=0.9.0"
+rustygear = { path = "../rustygear" }
 log = ">=0.4.8"
 env_logger = ">=0.6.0"
 tokio = { version = "1.15.0", features = ["full"] }

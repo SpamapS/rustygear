@@ -396,22 +396,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustygear"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "887988a760b9eb3dfa0336cbd5d4cb054050fae79a70cf27850575566049e93e"
-dependencies = [
- "bytes",
- "env_logger",
- "futures",
- "hash_ring",
- "log",
- "tokio",
- "tokio-util",
- "uuid",
-]
-
-[[package]]
 name = "rustygeard"
 version = "0.9.0"
 dependencies = [
@@ -421,7 +405,7 @@ dependencies = [
  "futures",
  "futures-sink",
  "log",
- "rustygear 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustygear",
  "tokio",
  "tokio-util",
  "tower-service",
