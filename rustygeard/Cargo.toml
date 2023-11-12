@@ -12,7 +12,7 @@ homepage = "https://github.com/SpamapS/rustygear"
 bytes = ">=1.1.0"
 rustygear = { path = "../rustygear" , version = ">= 0.10.0" }
 log = ">=0.4.8"
-env_logger = ">=0.6.0"
+env_logger = { version = ">=0.10.1" , features = ["auto-color", "humantime"] }
 tokio = { version = "1.15.0", features = ["full"] }
 tokio-util = { version = "0.6.9", features = ["codec"] }
 tower-service = "0.3"
