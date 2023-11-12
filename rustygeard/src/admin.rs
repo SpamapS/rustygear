@@ -1,3 +1,5 @@
+use std::net::SocketAddr;
+
 use bytes::{BufMut, Bytes, BytesMut};
 
 use rustygear::codec::Packet;
@@ -5,7 +7,7 @@ use rustygear::constants::{PRIORITY_HIGH, PRIORITY_NORMAL, PRIORITY_LOW};
 
 use crate::queues::SharedJobStorage;
 use crate::worker::{SharedWorkers, Wake};
-use crate::service::WorkersByConnId;
+use crate::service::{WorkersByConnId, GearmanService};
 
 pub fn admin_command_status(storage: SharedJobStorage, workers: SharedWorkers) -> Packet {
     let mut response = BytesMut::with_capacity(1024 * 1024); // XXX Wild guess.
@@ -76,6 +78,22 @@ pub fn admin_command_workers(workers: WorkersByConnId) -> Packet {
     response.extend(b".\n");
     let response = response.freeze();
     Packet::new_text_res(response)
+}
+
+pub fn admin_command_shutdown(service: &GearmanService, addr: &SocketAddr) -> Packet {
+    // For now we only allow this on localhost.
+    if match addr {
+        SocketAddr::V6(addr) => {
+            addr.to_string().starts_with("[::1]")
+        },
+        SocketAddr::V4(addr) => {
+            addr.to_string().starts_with("127.0.0.")
+        }
+    } {
+        service.shutdown_service();
+        return Packet::new_text_res(Bytes::from("BYE\n"))
+    }
+    return Packet::new_text_res(Bytes::from(format!("ERR: Not allowed from {:?}\n", addr)));
 }
 
 pub fn admin_command_unknown() -> Packet {

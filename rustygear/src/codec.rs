@@ -58,6 +58,7 @@ impl fmt::Debug for Packet {
             _p @ ADMIN_UNKNOWN => "ADMIN_UNKNOWN",
             _p @ ADMIN_RESPONSE => "ADMIN_RESPONSE",
             _p @ ADMIN_WORKERS => "ADMIN_WORKERS",
+            _p @ ADMIN_SHUTDOWN => "ADMIN_SHUTDOWN",
             _ => &unimpl,
         };
         write!(
@@ -92,6 +93,7 @@ impl Packet {
                 "status" => ADMIN_STATUS,
                 "workers" => ADMIN_WORKERS,
                 "prioritystatus" => ADMIN_PRIORITYSTATUS,
+                "shutdown" => ADMIN_SHUTDOWN,
                 _ => ADMIN_UNKNOWN,
             };
             return Ok(Some(Packet {
