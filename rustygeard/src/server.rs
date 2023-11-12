@@ -8,7 +8,7 @@ use std::os::unix::io::AsRawFd;
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use rustygear::constants::ADMIN_UNKNOWN;
+use rustygear::constants::{ADMIN_UNKNOWN, NOOP};
 use rustygear::util::new_req;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
@@ -62,6 +62,8 @@ impl GearmanServer {
                         // Read stuff, write if needed
                         let senders_by_conn_id = senders_by_conn_id.clone();
                         let workers_by_conn_id = workers_by_conn_id.clone();
+                        let senders_by_conn_id_r = senders_by_conn_id.clone();
+                        let workers_by_conn_id_r = workers_by_conn_id.clone();
                         let senders_by_conn_id_w = senders_by_conn_id.clone();
                         let workers_by_conn_id_w = workers_by_conn_id.clone();
                         let queues = queues.clone();
@@ -95,30 +97,41 @@ impl GearmanServer {
                                     }
                                 }
                             }
-                            info!("Reader shutting down.");
+                            info!("Reader for ({}) shutting down.", conn_id);
+                            {
+                                let mut senders_by_conn_id = senders_by_conn_id_r.lock().unwrap();
+                                senders_by_conn_id.remove(&conn_id);
+                            }
+                            {
+                                let mut workers_by_conn_id = workers_by_conn_id_r.lock().unwrap();
+                                workers_by_conn_id.remove(&conn_id);
+                            }
+                            reader_tx.send(new_req(NOOP, Bytes::new())).await.unwrap();
                             drop(reader_tx);
+                            drop(service);
                         };
                         let writer_shutdown = shutdown.clone();
                         let writer = async move {
                             while let Some(packet) = rx.recv().await {
+                                trace!("Sending {:?}", &packet);
+                                if let Err(_) = sink.send(packet).await {
+                                    info!("Connection ({}) dropped", conn_id);
+                                    break;
+                                }
                                 let shutdown = writer_shutdown.clone();
                                 if shutdown.load(Ordering::Relaxed) {
                                     break;
                                 }
-                                trace!("Sending {:?}", &packet);
-                                if let Err(_) = sink.send(packet).await {
-                                    {
-                                        let mut workers_by_conn_id = workers_by_conn_id_w.lock().unwrap();
-                                        workers_by_conn_id.remove(&conn_id);
-                                    }
-                                    {
-                                        let mut senders_by_conn_id = senders_by_conn_id_w.lock().unwrap();
-                                        senders_by_conn_id.remove(&conn_id);
-                                    }
-                                    error!("Connection ({}) dropped", conn_id);
-                                }
                             }
-                            info!("Writer shutting down");
+                            debug!("Writer for ({}) shutting down", conn_id);
+                            {
+                                let mut workers_by_conn_id = workers_by_conn_id_w.lock().unwrap();
+                                workers_by_conn_id.remove(&conn_id);
+                            }
+                            {
+                                let mut senders_by_conn_id = senders_by_conn_id_w.lock().unwrap();
+                                senders_by_conn_id.remove(&conn_id);
+                            }
                         };
 
                         let shutterdown = async move {
