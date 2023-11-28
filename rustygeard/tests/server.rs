@@ -1,3 +1,6 @@
+
+
+
 use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc::{SyncSender, Receiver, sync_channel};
 use std::panic::catch_unwind;
@@ -19,7 +22,7 @@ pub fn start_test_server() -> Option<TcpStream> {
                 },
             };
         });
-        match rx.recv_timeout(Duration::from_millis(50)) {
+        match rx.recv_timeout(Duration::from_millis(500)) {
             Err(_e) => {},
             Ok(_failed) => {
                 println!("Failed to listen on port {}", port);

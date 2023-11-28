@@ -4,7 +4,7 @@ extern crate rustygear;
 extern crate rustygeard;
 
 use std::collections::{BTreeMap, HashMap};
-use std::net::{SocketAddr, SocketAddrV6};
+use std::net::SocketAddrV6;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 

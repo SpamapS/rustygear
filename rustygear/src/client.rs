@@ -1,3 +1,4 @@
+use core::fmt;
 /*
  * Copyright 2020 Clint Byrum
  *
@@ -21,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
+use hashring::HashRing;
 use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -58,6 +60,7 @@ pub struct JobStatus {
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
+    conns_ring: HashRing<usize>, // Values are offsets in conns
     connected: Vec<bool>,
     client_id: Option<Bytes>,
     senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
@@ -88,9 +91,20 @@ struct ClientHandler {
 }
 
 /// Return object for submit_ functions.
+#[derive(Debug)]
 pub struct ClientJob {
     handle: Bytes,
     response_rx: Receiver<WorkUpdate>,
+}
+
+impl fmt::Display for ClientJob {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            // Write strictly the first element into the supplied output
+            // stream: `f`. Returns `fmt::Result` which indicates whether the
+            // operation succeeded or failed. Note that `write!` uses syntax which
+            // is very similar to `println!`.
+            write!(f, "ClientJob[{}]", String::from_utf8(self.handle.to_vec()).unwrap())
+    }
 }
 
 /// Passed to workers
@@ -159,7 +173,10 @@ impl ClientJob {
     /// Use this in clients to wait for a response on a job that was submitted. This will block
     /// forever or error if used on a background job.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
-        Ok(self.response_rx.recv().await.unwrap())
+        match self.response_rx.recv().await {
+            None => Err(io::Error::new(io::ErrorKind::Other, "Nothing to receive.")),
+            Some(workupdate) => Ok(workupdate),
+        }
     }
 }
 
@@ -236,6 +253,7 @@ impl Client {
         Client {
             servers: Vec::new(),
             conns: Arc::new(Mutex::new(Vec::new())),
+            conns_ring: HashRing::new(),
             connected: Vec::new(),
             client_id: None,
             senders_by_handle: Arc::new(Mutex::new(HashMap::new())),
@@ -317,6 +335,7 @@ impl Client {
             )));
             self.connected[offset] = true;
             self.conns.lock().unwrap().insert(offset, handler.clone());
+            self.conns_ring.add(offset);
             let reader = async move {
                 let tx = tx.clone();
                 while let Some(frame) = stream.next().await {
@@ -356,7 +375,6 @@ impl Client {
     ///
     /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
-        let payload = payload.clone();
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
         let conn: Arc<Mutex<ClientHandler>> = {
             if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
@@ -380,7 +398,11 @@ impl Client {
     /// Submits a foreground job. The see [ClientJob.response] for how to see the response from the
     /// worker.
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB, function, payload).await
+        self.direct_submit(SUBMIT_JOB, function, payload, None).await
+    }
+
+    pub async fn submit_unique(&mut self, function: &str, unique: &[u8], payload: &[u8]) -> Result<ClientJob, io::Error> {
+        self.direct_submit(SUBMIT_JOB, function, payload, Some(unique)).await
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
@@ -390,7 +412,18 @@ impl Client {
         function: &str,
         payload: &[u8],
     ) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB_BG, function, payload).await
+        self.direct_submit(SUBMIT_JOB_BG, function, payload, None).await
+    }
+
+    /// Submits a background job. The [ClientJob] returned won't be able to use the
+    /// [ClientJob.response] method because the server will never send packets for it.
+    pub async fn submit_background_unique(
+        &mut self,
+        function: &str,
+        unique: &[u8],
+        payload: &[u8],
+    ) -> Result<ClientJob, io::Error> {
+        self.direct_submit(SUBMIT_JOB_BG, function, payload, Some(unique)).await
     }
 
     async fn direct_submit(
@@ -398,10 +431,23 @@ impl Client {
         ptype: u32,
         function: &str,
         payload: &[u8],
+        unique: Option<&[u8]>,
     ) -> Result<ClientJob, io::Error> {
+        let mut uuid_unique = BytesMut::new();
+        let unique: &[u8] = match unique {
+            None => {
+                uuid_unique.extend(format!("{}", Uuid::new_v4()).bytes());
+                &uuid_unique
+            },
+            Some(unique) => unique,
+        };
+        let conn_index = {
+            let hashable: Vec<u8> = unique.iter().map(|b| *b).collect();
+            self.conns_ring.get(&hashable).expect("No connected servers yet!")
+        };
         let conn = {
             let mut conns = self.conns.lock().unwrap();
-            if let Some(conn) = conns.get_mut(0) {
+            if let Some(conn) = conns.get_mut(*conn_index) {
                 conn.clone()
             } else {
                 return Err(io::Error::new(
@@ -412,11 +458,10 @@ impl Client {
         };
         /* Pick the conn later */
         let conn = conn.clone();
-        let unique = format!("{}", Uuid::new_v4());
         let mut data = BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
         data.extend(function.bytes());
         data.put_u8(b'\0');
-        data.extend(unique.bytes());
+        data.extend(unique);
         data.put_u8(b'\0');
         data.extend(payload);
         let packet = new_req(ptype, data.freeze());

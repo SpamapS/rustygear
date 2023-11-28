@@ -94,7 +94,7 @@ impl GearmanService {
         let senders_by_conn_id = self.senders_by_conn_id.lock().unwrap();
         match senders_by_conn_id.get(&conn_id) {
             None => {
-                panic!("No connection found for conn_id = {}", &conn_id); // XXX You can do better
+                error!("No connection found for conn_id = {} while trying to send {:?}", &conn_id, packet); // XXX You can do better
             }
             Some(tx) => {
                 let tx = tx.clone();

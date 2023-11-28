@@ -10,7 +10,7 @@ keywords = ["gearman", "client"]
 
 [dependencies]
 bytes = ">=1.1.0"
-hash_ring = ">=0.1.7"
+hashring = ">=0.3.3"
 log = ">=0.4.8"
 env_logger = { version = ">=0.10.1", features = ["auto-color","humantime"] }
 futures = ">=0.3.4"
