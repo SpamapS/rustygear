@@ -99,11 +99,15 @@ pub struct ClientJob {
 
 impl fmt::Display for ClientJob {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-            // Write strictly the first element into the supplied output
-            // stream: `f`. Returns `fmt::Result` which indicates whether the
-            // operation succeeded or failed. Note that `write!` uses syntax which
-            // is very similar to `println!`.
-            write!(f, "ClientJob[{}]", String::from_utf8(self.handle.to_vec()).unwrap())
+        // Write strictly the first element into the supplied output
+        // stream: `f`. Returns `fmt::Result` which indicates whether the
+        // operation succeeded or failed. Note that `write!` uses syntax which
+        // is very similar to `println!`.
+        write!(
+            f,
+            "ClientJob[{}]",
+            String::from_utf8(self.handle.to_vec()).unwrap()
+        )
     }
 }
 
@@ -398,11 +402,18 @@ impl Client {
     /// Submits a foreground job. The see [ClientJob.response] for how to see the response from the
     /// worker.
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB, function, payload, None).await
+        self.direct_submit(SUBMIT_JOB, function, payload, None)
+            .await
     }
 
-    pub async fn submit_unique(&mut self, function: &str, unique: &[u8], payload: &[u8]) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB, function, payload, Some(unique)).await
+    pub async fn submit_unique(
+        &mut self,
+        function: &str,
+        unique: &[u8],
+        payload: &[u8],
+    ) -> Result<ClientJob, io::Error> {
+        self.direct_submit(SUBMIT_JOB, function, payload, Some(unique))
+            .await
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
@@ -412,7 +423,8 @@ impl Client {
         function: &str,
         payload: &[u8],
     ) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB_BG, function, payload, None).await
+        self.direct_submit(SUBMIT_JOB_BG, function, payload, None)
+            .await
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
@@ -423,7 +435,8 @@ impl Client {
         unique: &[u8],
         payload: &[u8],
     ) -> Result<ClientJob, io::Error> {
-        self.direct_submit(SUBMIT_JOB_BG, function, payload, Some(unique)).await
+        self.direct_submit(SUBMIT_JOB_BG, function, payload, Some(unique))
+            .await
     }
 
     async fn direct_submit(
@@ -438,12 +451,14 @@ impl Client {
             None => {
                 uuid_unique.extend(format!("{}", Uuid::new_v4()).bytes());
                 &uuid_unique
-            },
+            }
             Some(unique) => unique,
         };
         let conn_index = {
             let hashable: Vec<u8> = unique.iter().map(|b| *b).collect();
-            self.conns_ring.get(&hashable).expect("No connected servers yet!")
+            self.conns_ring
+                .get(&hashable)
+                .expect("No connected servers yet!")
         };
         let conn = {
             let mut conns = self.conns.lock().unwrap();
@@ -464,6 +479,10 @@ impl Client {
         data.extend(unique);
         data.put_u8(b'\0');
         data.extend(payload);
+        /* We need this to stay locked until we've gotten a handle back. That way if we're too slow processing
+           the JOB_ASSIGN packets to catch a fast worker that sends  WORK_COMPLETE, we won't try to handle
+           that in the reader until the handle is in senders_by_handle. */
+        let mut response_by_handle = self.senders_by_handle.lock().unwrap();
         let packet = new_req(ptype, data.freeze());
         {
             let conn = conn.clone();
@@ -472,7 +491,6 @@ impl Client {
         }
         if let Some(handle) = self.job_created_rx.recv().await {
             let (tx, rx) = channel(100); // XXX lamer
-            let mut response_by_handle = self.senders_by_handle.lock().unwrap();
             response_by_handle.insert(handle.clone(), tx.clone());
             Ok(ClientJob::new(handle, rx))
         } else {
@@ -529,12 +547,14 @@ impl Client {
                 send_packet(conn.clone(), can_do).await?;
             }
         }
-        let func_arc = Arc::new(Mutex::new(func));        
+        let func_arc = Arc::new(Mutex::new(func));
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
                 let func_clone = func_arc.clone();
                 task::spawn_blocking(move || {
-                    let rt  = tokio::runtime::Builder::new_current_thread().build().unwrap();
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .unwrap();
                     let res = func_clone.lock().unwrap()(&mut job);
                     match res {
                         Err(_) => {
@@ -548,7 +568,9 @@ impl Client {
                             }
                         }
                     };
-                }).await.unwrap();
+                })
+                .await
+                .unwrap();
             }
         });
         Ok(self)
