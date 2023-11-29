@@ -782,7 +782,7 @@ impl ClientHandler {
             let tx = tx.clone();
             runtime::Handle::current().spawn(async move { tx.send(work_update).await });
         } else {
-            error!("Received work for unknown job: {:?}", handle);
+            error!("Received {:?} for unknown job: {:?}", req, handle);
         };
         Ok(no_response())
     }
