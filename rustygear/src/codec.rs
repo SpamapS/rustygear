@@ -130,6 +130,7 @@ impl Packet {
     }
 }
 
+#[derive(Debug)]
 pub struct PacketCodec;
 
 impl Decoder for PacketCodec {

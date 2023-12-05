@@ -14,10 +14,10 @@ use core::fmt;
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use std::collections::HashMap;
 use std::io;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
@@ -28,15 +28,20 @@ use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task;
+use tokio::time::sleep;
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
 
+use crate::clientdata::ClientData;
 use crate::codec::{Packet, PacketCodec};
 use crate::constants::*;
 use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
 
 type Hostname = String;
+
+const CLIENT_CHANNEL_BOUND_SIZE: usize = 100;
+const RECONNECT_BACKOFF: Duration = Duration::from_millis(30000);
 
 #[derive(Debug)]
 /// Used for passing job completion stats to clients
@@ -59,35 +64,20 @@ pub struct JobStatus {
 /// See examples/client.rs and examples/worker.rs for information on how to use it.
 pub struct Client {
     servers: Vec<Hostname>,
+    streams: Arc<Mutex<Vec<Option<TcpStream>>>>,
     conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
-    conns_ring: HashRing<usize>, // Values are offsets in conns
-    connected: Vec<bool>,
+    conns_ring: Arc<Mutex<HashRing<usize>>>, // Values are offsets in conns
+    shutdown_tx: Option<Sender<()>>,
+    shutdown_rx: Option<Receiver<()>>,
     client_id: Option<Bytes>,
-    senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
-    echo_tx: Sender<Bytes>,
-    echo_rx: Receiver<Bytes>,
-    job_created_tx: Sender<Bytes>,
-    job_created_rx: Receiver<Bytes>,
-    status_res_tx: Sender<JobStatus>,
-    status_res_rx: Receiver<JobStatus>,
-    error_tx: Sender<(Bytes, Bytes)>,
-    error_rx: Receiver<(Bytes, Bytes)>,
-    worker_job_tx: Sender<WorkerJob>,
-    worker_job_rx: Receiver<WorkerJob>,
+    client_data: Arc<Mutex<ClientData>>,
 }
 
 /// Each individual connection has one of these for handling packets
 struct ClientHandler {
     client_id: Option<Bytes>,
-    senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-    jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
     sink_tx: Sender<Packet>,
-    echo_tx: Sender<Bytes>,
-    job_created_tx: Sender<Bytes>,
-    status_res_tx: Sender<JobStatus>,
-    error_tx: Sender<(Bytes, Bytes)>,
-    worker_job_tx: Sender<WorkerJob>,
+    client_data: Arc<Mutex<ClientData>>,
 }
 
 /// Return object for submit_ functions.
@@ -249,38 +239,23 @@ impl WorkerJob {
 
 impl Client {
     pub fn new() -> Client {
-        let (tx, rx) = channel(100); // XXX this is lame
-        let (txj, rxj) = channel(100); // XXX this is lame
-        let (txs, rxs) = channel(100); // XXX this is lame
-        let (txe, rxe) = channel(100); // XXX this is lame
-        let (txw, rxw) = channel(100);
         Client {
             servers: Vec::new(),
+            streams: Arc::new(Mutex::new(Vec::new())),
             conns: Arc::new(Mutex::new(Vec::new())),
-            conns_ring: HashRing::new(),
-            connected: Vec::new(),
+            conns_ring: Arc::new(Mutex::new(HashRing::new())),
+            shutdown_tx: None,
+            shutdown_rx: None,
             client_id: None,
-            senders_by_handle: Arc::new(Mutex::new(HashMap::new())),
-            jobs_tx_by_func: Arc::new(Mutex::new(HashMap::new())),
-            echo_tx: tx,
-            echo_rx: rx,
-            job_created_tx: txj,
-            job_created_rx: rxj,
-            status_res_tx: txs,
-            status_res_rx: rxs,
-            error_tx: txe,
-            error_rx: rxe,
-            worker_job_tx: txw,
-            worker_job_rx: rxw,
+            client_data: Arc::new(Mutex::new(ClientData::new())),
         }
     }
 
     /// Add a server to the client. This does not initiate anything, it just configures the client.
     ///
-    /// As of this writing, only one server at a time is supported.
     pub fn add_server(mut self, server: &str) -> Self {
         self.servers.push(Hostname::from(server));
-        self.connected.push(false);
+        self.streams.lock().unwrap().push(None);
         self
     }
 
@@ -291,85 +266,140 @@ impl Client {
     }
 
     /// Attempts to connect to all servers added via [Client.add_server]
-    pub async fn connect(mut self) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn connect(self) -> Result<Self, Box<dyn std::error::Error>> {
         /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
-        let mut i = 0;
-        let mut connects = Vec::new();
-        for is_conn in self.connected.iter() {
-            if !is_conn {
-                let server: &str = self.servers.get(i).unwrap();
-                let addr = server.to_socket_addrs().unwrap().next().unwrap();
-                trace!("really connecting: i={} addr={:?}", i, addr);
-                connects.push(
-                    runtime::Handle::current()
-                        .spawn(async move { (i, TcpStream::connect(addr).await) }),
-                );
-            }
-            i = i + 1;
-        }
-        for connect in connects.iter_mut() {
-            let connect = connect.await?;
-            let offset = connect.0;
-            let conn = connect.1?;
-            trace!(
-                "connected: offset={} server={}",
-                offset,
-                self.servers[offset]
-            );
-            let pc = PacketCodec {};
-            let (mut sink, mut stream) = pc.framed(conn).split();
-            if let Some(ref client_id) = self.client_id {
-                let req = new_req(SET_CLIENT_ID, client_id.clone());
-                sink.send(req).await?;
-            }
-            let (tx, mut rx) = channel(100); // XXX pick a good value or const
-            let tx = tx.clone();
-            let tx2 = tx.clone();
-            let handler = Arc::new(Mutex::new(ClientHandler::new(
-                &self.client_id,
-                self.senders_by_handle.clone(),
-                self.jobs_tx_by_func.clone(),
-                self.echo_tx.clone(),
-                tx2,
-                self.job_created_tx.clone(),
-                self.status_res_tx.clone(),
-                self.error_tx.clone(),
-                self.worker_job_tx.clone(),
-            )));
-            self.connected[offset] = true;
-            self.conns.lock().unwrap().insert(offset, handler.clone());
-            self.conns_ring.add(offset);
-            let reader = async move {
-                let tx = tx.clone();
-                while let Some(frame) = stream.next().await {
-                    trace!("Frame read: {:?}", frame);
-                    let response = {
-                        let handler = handler.clone();
-                        debug!("Locking handler");
-                        let mut handler = handler.lock().unwrap();
-                        debug!("Locked handler");
-                        handler.call(frame.unwrap())
-                    };
-                    if let Err(e) = response {
-                        error!("conn dropped?: {}", e);
+        let (ctx, mut crx) = channel(CLIENT_CHANNEL_BOUND_SIZE);
+        // Start connector thread which reads offsets from conns, writes to conns vec, and sends offset
+        let (ctdtx, mut ctdrx) = channel(CLIENT_CHANNEL_BOUND_SIZE);
+        let ctx_conn = ctx.clone();
+        let ctx2 = ctx.clone();
+        let wait_for_all_streams = self.streams.clone();
+        let connector_servers = self.servers.clone();
+        let connector_streams = self.streams.clone();
+        let client_id = self.client_id.clone();
+        let handler_client_data = self.client_data.clone();
+        let connector_conns = self.conns.clone();
+        let connector_conns_ring = self.conns_ring.clone();
+        let connector = async move {
+            loop {
+                let offset: Option<usize> = crx.recv().await;
+                match offset {
+                    None => {
+                        debug!("Shutting down connector thread.");
                         return;
-                    }
-                    if let Err(_) = tx.send(response.unwrap()).await {
-                        error!("receiver dropped")
+                    },
+                    Some(offset) => {
+                        match connector_servers.get(offset) {
+                            None => warn!("Invalid connection offset {} sent to connector thread, ignoring.", offset),
+                            Some(server) => {
+                                let server: &str = server;
+                                let addr = server.to_socket_addrs().unwrap().next().unwrap();
+                                trace!("really connecting: i={} addr={:?}", offset, addr);
+                                match TcpStream::connect(addr).await {
+                                    Err(e) => {
+                                        error!("Couldn't connect to {} [{}], will retry after {:?}", server, e, RECONNECT_BACKOFF);
+                                        let ctx_conn = ctx_conn.clone();
+                                        // Retry in BACKOFF seconds -- TODO: keep track and do exponential
+                                        runtime::Handle::current().spawn(
+                                            async move {
+                                                sleep(RECONNECT_BACKOFF).await;
+                                                ctx_conn.send(offset).await});
+                                    },
+                                    Ok(stream) => {
+                                        info!("Connected to {}", server);
+                                        connector_streams.lock().unwrap()[offset] = Some(stream);
+                                        if let Err(e) = ctdtx.send(offset).await {
+                                            // Connected channel is closed, shut it all down
+                                            info!("Shutting down connector because connected channel returned error ({})", e);
+                                            break;
+                                        }
+                                        let pc = PacketCodec {};
+                                        if let None = connector_streams.lock().unwrap()[offset] {
+                                            warn!("Received offset of disconnected server, ignoring");
+                                            continue;
+                                        }
+                                        let stream = std::mem::replace(&mut connector_streams.lock().unwrap()[offset], None);
+                                        let (mut sink, mut stream) = pc.framed(stream.unwrap()).split();
+                                        if let Some(ref client_id) = client_id {
+                                            let req = new_req(SET_CLIENT_ID, client_id.clone());
+                                            if let Err(e) = sink.send(req).await {
+                                                debug!("Connection {:?} can't send packets. ({:?})", sink, e);
+                                                continue;
+                                            }
+                                        }
+                                        let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX pick a good value or const
+                                        let tx = tx.clone();
+                                        let tx2 = tx.clone();
+                                        let handler = Arc::new(Mutex::new(ClientHandler::new(
+                                            &client_id,
+                                            tx2,
+                                            handler_client_data.clone(),
+                                        )));
+                                        connector_conns.lock().unwrap().insert(offset, handler.clone());
+                                        connector_conns_ring.lock().unwrap().add(offset);
+                                        let reader_streams = connector_streams.clone();
+                                        let reader_ctx = ctx2.clone();
+                                        let reader = async move {
+                                            let tx = tx.clone();
+                                            while let Some(frame) = stream.next().await {
+                                                trace!("Frame read: {:?}", frame);
+                                                let response = {
+                                                    let handler = handler.clone();
+                                                    debug!("Locking handler");
+                                                    let mut handler = handler.lock().unwrap();
+                                                    debug!("Locked handler");
+                                                    handler.call(frame.unwrap())
+                                                };
+                                                if let Err(e) = response {
+                                                    error!("conn dropped?: {}", e);
+                                                    break;
+                                                }
+                                                if let Err(_) = tx.send(response.unwrap()).await {
+                                                    error!("receiver dropped")
+                                                }
+                                            }
+                                            reader_streams.lock().unwrap()[offset] = None;
+                                            if let Err(e) = reader_ctx.send(offset).await {
+                                                error!("Can't send to connector, aborting! {}", e);
+                                            }
+                                        };
+                                        let writer_streams = connector_streams.clone();
+                                        let writer = async move {
+                                            while let Some(packet) = rx.recv().await {
+                                                trace!("Sending {:?}", &packet);
+                                                if let Err(_) = sink.send(packet).await {
+                                                    error!("Connection ({}) dropped", offset);
+                                                    writer_streams.lock().unwrap()[offset] = None;
+                                                }
+                                            }
+                                        };
+                                        runtime::Handle::current().spawn(reader);
+                                        runtime::Handle::current().spawn(writer);
+                                    },
+                                }
+                            }
+                        }
                     }
                 }
-            };
-            let writer = async move {
-                while let Some(packet) = rx.recv().await {
-                    trace!("Sending {:?}", &packet);
-                    if let Err(_) = sink.send(packet).await {
-                        error!("Connection ({}) dropped", offset);
-                    }
-                }
-            };
-            runtime::Handle::current().spawn(reader);
-            runtime::Handle::current().spawn(writer);
+            }
+        };
+        runtime::Handle::current().spawn(connector);
+        trace!("Connector thread started, initiating all connections");
+        for (i, _) in self.servers.iter().enumerate() {
+            ctx.send(i).await.expect("Connector RX lives");
+        }
+        let mut waiting_for = wait_for_all_streams.lock().unwrap().len();
+        loop {
+            match ctdrx.recv().await {
+                None => {
+                    return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Connector aborted")))
+                },
+                Some(_) => { waiting_for -= 1 }
+            }
+            if waiting_for <= 0 {
+                break;
+            }
         }
         trace!("connected all");
         Ok(self)
@@ -392,7 +422,7 @@ impl Client {
         };
         send_packet(conn, packet).await?;
         debug!("Waiting for echo response");
-        match self.echo_rx.recv().await {
+        match self.client_data.lock().unwrap().echo_rx().recv().await {
             Some(res) => info!("echo received: {:?}", res),
             None => info!("echo channel closed"),
         };
@@ -456,13 +486,13 @@ impl Client {
         };
         let conn_index = {
             let hashable: Vec<u8> = unique.iter().map(|b| *b).collect();
-            self.conns_ring
+            *self.conns_ring.lock().unwrap()
                 .get(&hashable)
                 .expect("No connected servers yet!")
         };
         let conn = {
             let mut conns = self.conns.lock().unwrap();
-            if let Some(conn) = conns.get_mut(*conn_index) {
+            if let Some(conn) = conns.get_mut(conn_index) {
                 conn.clone()
             } else {
                 return Err(io::Error::new(
@@ -482,16 +512,16 @@ impl Client {
         /* We need this to stay locked until we've gotten a handle back. That way if we're too slow processing
            the JOB_ASSIGN packets to catch a fast worker that sends  WORK_COMPLETE, we won't try to handle
            that in the reader until the handle is in senders_by_handle. */
-        let mut response_by_handle = self.senders_by_handle.lock().unwrap();
+        let mut client_data = self.client_data.lock().unwrap();
         let packet = new_req(ptype, data.freeze());
         {
             let conn = conn.clone();
             send_packet(conn, packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
-        if let Some(handle) = self.job_created_rx.recv().await {
-            let (tx, rx) = channel(100); // XXX lamer
-            response_by_handle.insert(handle.clone(), tx.clone());
+        if let Some(handle) = self.client_data.lock().unwrap().job_created_rx().recv().await {
+            let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
+            client_data.set_sender_by_handle(handle.clone(), tx.clone());
             Ok(ClientJob::new(handle, rx))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
@@ -508,7 +538,7 @@ impl Client {
         payload.extend(handle);
         let status_req = new_req(GET_STATUS, payload.freeze());
         send_packet(conn, status_req).await?;
-        if let Some(status_res) = self.status_res_rx.recv().await {
+        if let Some(status_res) = self.client_data.lock().unwrap().status_res_rx().recv().await {
             Ok(status_res)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
@@ -529,17 +559,17 @@ impl Client {
     where
         F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
     {
-        let (tx, mut rx) = channel(100); // Some day we'll use this param right
+        let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
             let mut conns = self.conns.lock().unwrap();
             for conn in conns.iter_mut() {
                 {
                     let conn = conn.lock().unwrap();
-                    let mut jobs_tx_by_func = conn.jobs_tx_by_func.lock().unwrap();
+                    let mut client_data = conn.client_data.lock().unwrap();
                     let mut k = Vec::with_capacity(function.len());
                     k.extend_from_slice(function.as_bytes());
                     // Same tx for all jobs, the jobs themselves will have a response conn ref
-                    jobs_tx_by_func.entry(k).or_insert(tx.clone());
+                    client_data.set_jobs_tx_by_func(k, tx.clone());
                 }
                 let mut payload = BytesMut::with_capacity(function.len());
                 payload.extend(function.bytes());
@@ -583,9 +613,9 @@ impl Client {
     /// not return unless there is an unexpected error.
     ///
     /// See examples/worker.rs for more information on how to use it.
-    pub async fn work(mut self) -> Result<(), io::Error> {
+    pub async fn work(self) -> Result<(), io::Error> {
         loop {
-            let job = self.worker_job_rx.try_recv();
+            let job = self.client_data.lock().unwrap().worker_job_rx().try_recv();
             let job = match job {
                 Err(TryRecvError::Empty) => {
                     let conns = self.conns.lock().unwrap();
@@ -593,7 +623,7 @@ impl Client {
                         let packet = new_req(GRAB_JOB, Bytes::new());
                         send_packet(conn.clone(), packet).await?;
                     }
-                    match self.worker_job_rx.recv().await {
+                    match self.client_data.lock().unwrap().worker_job_rx().recv().await {
                         Some(job) => job,
                         None => {
                             return Err(io::Error::new(
@@ -611,8 +641,7 @@ impl Client {
                 }
                 Ok(job) => job,
             };
-            let mut jobs_tx_by_func = self.jobs_tx_by_func.lock().unwrap();
-            let tx = match jobs_tx_by_func.get_mut(job.function()) {
+            let tx = match self.client_data.lock().unwrap().get_jobs_tx_by_func(&Vec::from(job.function())) {
                 None => {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
@@ -633,32 +662,30 @@ impl Client {
     /// Gets a single error that might have come from the server. The tuple returned is (code,
     /// message)
     pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
-        Ok(self.error_rx.recv().await)
+        Ok(self.client_data.lock().unwrap().error_rx().recv().await)
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        if let Some(shutdown_tx) = &self.shutdown_tx {
+            if let Err(e) = shutdown_tx.blocking_send(()) {
+                error!("Shutdown receiver was already destroyed! {}", e);
+            }
+        }
     }
 }
 
 impl ClientHandler {
     fn new(
         client_id: &Option<Bytes>,
-        senders_by_handle: Arc<Mutex<HashMap<Bytes, Sender<WorkUpdate>>>>,
-        jobs_tx_by_func: Arc<Mutex<HashMap<Vec<u8>, Sender<WorkerJob>>>>,
-        echo_tx: Sender<Bytes>,
         sink_tx: Sender<Packet>,
-        job_created_tx: Sender<Bytes>,
-        status_res_tx: Sender<JobStatus>,
-        error_tx: Sender<(Bytes, Bytes)>,
-        worker_job_tx: Sender<WorkerJob>,
+        client_data: Arc<Mutex<ClientData>>,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
-            senders_by_handle: senders_by_handle,
-            jobs_tx_by_func: jobs_tx_by_func,
-            echo_tx: echo_tx,
             sink_tx: sink_tx,
-            job_created_tx: job_created_tx,
-            status_res_tx: status_res_tx,
-            error_tx: error_tx,
-            worker_job_tx: worker_job_tx,
+            client_data: client_data,
         }
     }
 
@@ -698,7 +725,7 @@ impl ClientHandler {
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Echo response received: {:?}", req.data);
-        let tx = self.echo_tx.clone();
+        let tx = self.client_data.lock().unwrap().echo_tx();
         let data = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(data).await });
         Ok(no_response())
@@ -706,7 +733,7 @@ impl ClientHandler {
 
     fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Job Created: {:?}", req);
-        let tx = self.job_created_tx.clone();
+        let tx = self.client_data.lock().unwrap().job_created_tx();
         let handle = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(handle).await });
         Ok(no_response())
@@ -716,7 +743,7 @@ impl ClientHandler {
         let mut data = req.data.clone();
         let code = next_field(&mut data);
         let text = next_field(&mut data);
-        let tx = self.error_tx.clone();
+        let tx = self.client_data.lock().unwrap().error_tx();
         runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
         Ok(no_response())
     }
@@ -743,7 +770,7 @@ impl ClientHandler {
                 .parse()
                 .unwrap();
         }
-        let tx = self.status_res_tx.clone();
+        let tx = self.client_data.lock().unwrap().status_res_tx();
         runtime::Handle::current().spawn(async move { tx.send(js).await });
         Ok(no_response())
     }
@@ -799,9 +826,8 @@ impl ClientHandler {
                 _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
             }
         };
-        let senders_by_handle = self.senders_by_handle.lock().unwrap();
-        if let Some(tx) = senders_by_handle.get(&handle) {
-            let tx = tx.clone();
+        let client_data = self.client_data.lock().unwrap();
+        if let Some(tx) = client_data.get_sender_by_handle(&handle) {
             runtime::Handle::current().spawn(async move { tx.send(work_update).await });
         } else {
             error!("Received {:?} for unknown job: {:?}", req, handle);
@@ -820,7 +846,7 @@ impl ClientHandler {
             payload: payload,
             sink_tx: self.sink_tx.clone(),
         };
-        let tx = self.worker_job_tx.clone();
+        let tx = self.client_data.lock().unwrap().worker_job_tx();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
         Ok(no_response())
     }
