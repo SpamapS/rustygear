@@ -6,8 +6,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let worker = Client::new();
     worker
-        .add_server("127.0.0.1:4730")
         .add_server("127.0.0.1:4731")
+        .add_server("127.0.0.1:4730")
         //.add_server("127.0.0.1:4731")  Add all of your servers here
         .set_client_id("example")
         .connect()

@@ -5,6 +5,7 @@ use tokio::sync::mpsc::{Sender, Receiver, channel};
 
 use crate::client::{WorkUpdate, WorkerJob, JobStatus};
 
+#[derive(Debug)]
 pub struct ClientReceivers {
     pub echo_rx: Receiver<Bytes>,
     pub job_created_rx: Receiver<Bytes>,
@@ -13,6 +14,7 @@ pub struct ClientReceivers {
     pub worker_job_rx: Receiver<WorkerJob>,
 }
 
+#[derive(Debug)]
 struct ClientSenders {
     pub senders_by_handle: HashMap<Bytes, Sender<WorkUpdate>>,
     pub jobs_tx_by_func: HashMap<Vec<u8>, Sender<WorkerJob>>,
@@ -43,6 +45,7 @@ impl ClientSenders {
     }
 }
 
+#[derive(Debug)]
 pub struct ClientData {
     receivers: Arc<Mutex<ClientReceivers>>,
     senders: Arc<RwLock<ClientSenders>>,
@@ -88,6 +91,7 @@ impl ClientData {
     }
 
     pub fn receivers(&self) -> MutexGuard<ClientReceivers> {
+        trace!("Locking receivers");
         self.receivers.lock().unwrap()
     }
 

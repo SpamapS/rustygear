@@ -36,9 +36,9 @@ use uuid::Uuid;
 
 use crate::clientdata::ClientData;
 use crate::codec::{Packet, PacketCodec};
-use crate::conn::Connections;
+use crate::conn::{Connections, ConnHandler};
 use crate::constants::*;
-use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
+use crate::util::{new_req, new_res};
 
 type Hostname = String;
 
@@ -48,12 +48,12 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(30000);
 #[derive(Debug)]
 /// Used for passing job completion stats to clients
 pub struct JobStatus {
-    handle: Bytes,
-    known: bool,
-    running: bool,
-    numerator: u32,
-    denominator: u32,
-    waiting: u32,
+    pub handle: Bytes,
+    pub known: bool,
+    pub running: bool,
+    pub numerator: u32,
+    pub denominator: u32,
+    pub waiting: u32,
 }
 
 impl Display for JobStatus {
@@ -79,14 +79,6 @@ pub struct Client {
     streams: Arc<Mutex<Vec<Option<TcpStream>>>>,
     conns: Arc<Mutex<Connections>>,
     client_id: Option<Bytes>,
-    client_data: ClientData,
-}
-
-/// Each individual connection has one of these for handling packets
-#[derive(Clone)]
-pub struct ClientHandler {
-    client_id: Option<Bytes>,
-    sink_tx: Sender<Packet>,
     client_data: ClientData,
 }
 
@@ -117,10 +109,10 @@ impl fmt::Display for ClientJob {
 /// to the gearman server from workers, although this is not known to work
 /// generically as of this writing.
 pub struct WorkerJob {
-    handle: Bytes,
-    function: Bytes,
-    payload: Bytes,
-    sink_tx: Sender<Packet>,
+    pub handle: Bytes,
+    pub function: Bytes,
+    pub payload: Bytes,
+    pub(crate) sink_tx: Sender<Packet>,
 }
 
 #[derive(Debug)]
@@ -148,14 +140,6 @@ pub enum WorkUpdate {
         denominator: usize,
     },
     Fail(Bytes),
-}
-
-async fn send_packet<'a>(conn: &ClientHandler, packet: Packet) -> Result<(), io::Error> {
-    if let Err(e) = conn.sink_tx.send(packet).await {
-        error!("Receiver dropped");
-        return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
-    }
-    Ok(())
 }
 
 impl ClientJob {
@@ -288,6 +272,7 @@ impl Client {
         let handler_client_data = self.client_data.clone();
         let connector_conns = self.conns.clone();
         let connector = async move {
+            trace!("Connector thread starting");
             loop {
                 let offset: Option<usize> = crx.recv().await;
                 match offset {
@@ -315,11 +300,6 @@ impl Client {
                                     Ok(stream) => {
                                         info!("Connected to {}", server);
                                         connector_streams.lock().unwrap()[offset] = Some(stream);
-                                        if let Err(e) = ctdtx.send(offset).await {
-                                            // Connected channel is closed, shut it all down
-                                            info!("Shutting down connector because connected channel returned error ({})", e);
-                                            break;
-                                        }
                                         let pc = PacketCodec {};
                                         if let None = connector_streams.lock().unwrap()[offset] {
                                             warn!("Received offset of disconnected server, ignoring");
@@ -337,12 +317,14 @@ impl Client {
                                         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX pick a good value or const
                                         let tx = tx.clone();
                                         let tx2 = tx.clone();
-                                        let handler = ClientHandler::new(
+                                        let handler = ConnHandler::new(
                                             &client_id,
                                             tx2,
                                             handler_client_data.clone(),
                                         );
+                                        trace!("Inserting at {}", offset);
                                         connector_conns.lock().unwrap().insert(offset, handler.clone());
+                                        trace!("Inserted at {}", offset);
                                         let reader_streams = connector_streams.clone();
                                         let reader_ctx = ctx2.clone();
                                         let reader = async move {
@@ -381,6 +363,11 @@ impl Client {
                                         };
                                         runtime::Handle::current().spawn(reader);
                                         runtime::Handle::current().spawn(writer);
+                                        if let Err(e) = ctdtx.send(offset).await {
+                                            // Connected channel is closed, shut it all down
+                                            info!("Shutting down connector because connected channel returned error ({})", e);
+                                            break;
+                                        }
                                     },
                                 }
                             }
@@ -396,6 +383,7 @@ impl Client {
         }
         let mut waiting_for = wait_for_all_streams.lock().unwrap().len();
         loop {
+            info!("Waiting for {}", waiting_for);
             match ctdrx.recv().await {
                 None => {
                     return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Connector aborted")))
@@ -406,7 +394,7 @@ impl Client {
                 break;
             }
         }
-        trace!("connected all");
+        debug!("connected all");
         Ok(self)
     }
 
@@ -421,7 +409,7 @@ impl Client {
                 "No connections for echo!",
             ));
         }
-        send_packet(&self.conns.lock().unwrap().get(0).unwrap(), packet).await?;
+        self.conns.lock().unwrap().get(0).unwrap().send_packet(packet).await?;
         debug!("Waiting for echo response");
         match self.client_data.receivers().echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
@@ -503,7 +491,7 @@ impl Client {
                 },
                 Some(conn) => conn
             };
-            send_packet(conn, packet).await?;
+            conn.send_packet(packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
         let client_data = self.client_data.clone();
@@ -526,7 +514,7 @@ impl Client {
             let mut payload = BytesMut::with_capacity(handle.len());
             payload.extend(handle);
             let status_req = new_req(GET_STATUS, payload.freeze());
-            send_packet(conn, status_req).await?;
+            conn.send_packet(status_req).await?;
         }
         if let Some(status_res) = self.client_data.receivers().status_res_rx.recv().await {
             Ok(status_res)
@@ -551,7 +539,7 @@ impl Client {
     {
         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
-            for conn in self.conns.lock().unwrap().iter_mut().filter_map(|c| c.to_owned()) {
+            for (i, conn) in self.conns.lock().unwrap().iter_mut().filter_map(|c| c.to_owned()).enumerate() {
                 {
                     let mut k = Vec::with_capacity(function.len());
                     k.extend_from_slice(function.as_bytes());
@@ -561,7 +549,8 @@ impl Client {
                 let mut payload = BytesMut::with_capacity(function.len());
                 payload.extend(function.bytes());
                 let can_do = new_req(CAN_DO, payload.freeze());
-                send_packet(&conn, can_do).await?;
+                conn.send_packet(can_do).await?;
+                info!("Sent CAN_DO({}) to {}", function, self.servers[i]);
             }
         }
         let func_arc = Arc::new(Mutex::new(func));
@@ -607,7 +596,7 @@ impl Client {
                 Err(TryRecvError::Empty) => {
                     for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
                         let packet = new_req(GRAB_JOB, Bytes::new());
-                        send_packet(&conn, packet).await?;
+                        conn.send_packet(packet).await?;
                     }
                     match self.client_data.receivers().worker_job_rx.recv().await {
                         Some(job) => job,
@@ -649,180 +638,5 @@ impl Client {
     /// message)
     pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
         Ok(self.client_data.receivers().error_rx.recv().await)
-    }
-}
-
-impl ClientHandler {
-    fn new (
-        client_id: &Option<Bytes>,
-        sink_tx: Sender<Packet>,
-        client_data: ClientData,
-    ) -> ClientHandler {
-        ClientHandler {
-            client_id: client_id.clone(),
-            sink_tx: sink_tx,
-            client_data: client_data,
-        }
-    }
-
-    fn call(&mut self, req: Packet) -> Result<Packet, io::Error> {
-        debug!("[{:?}] Got a req {:?}", self.client_id, req);
-        match req.ptype {
-            NOOP => self.handle_noop(),
-            JOB_CREATED => self.handle_job_created(&req),
-            NO_JOB => self.handle_no_job(),
-            JOB_ASSIGN => self.handle_job_assign(&req),
-            ECHO_RES => self.handle_echo_res(&req),
-            ERROR => self.handle_error(&req),
-            STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
-            OPTION_RES => self.handle_option_res(&req),
-            WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
-                self.handle_work_update(&req)
-            }
-            //JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
-            //JOB_ASSIGN_ALL => self.handle_job_assign_all(&req),
-            _ => {
-                error!("Unimplemented: {:?} processing packet", req);
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Invalid packet type {}", req.ptype),
-                ))
-            }
-        }
-    }
-
-    fn handle_noop(&self) -> Result<Packet, io::Error> {
-        Ok(new_req(GRAB_JOB, Bytes::new()))
-    }
-
-    fn handle_no_job(&self) -> Result<Packet, io::Error> {
-        Ok(new_req(PRE_SLEEP, Bytes::new()))
-    }
-
-    fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        info!("Echo response received: {:?}", req.data);
-        let tx = self.client_data.echo_tx();
-        let data = req.data.clone();
-        runtime::Handle::current().spawn(async move { tx.send(data).await });
-        Ok(no_response())
-    }
-
-    fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        info!("Job Created: {:?}", req);
-        let tx = self.client_data.job_created_tx();
-        let handle = req.data.clone();
-        runtime::Handle::current().spawn(async move { tx.send(handle).await });
-        Ok(no_response())
-    }
-
-    fn handle_error(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        let mut data = req.data.clone();
-        let code = next_field(&mut data);
-        let text = next_field(&mut data);
-        let tx = self.client_data.error_tx();
-        runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
-        Ok(no_response())
-    }
-
-    fn handle_status_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        let mut req = req.clone();
-        let mut js = JobStatus {
-            handle: next_field(&mut req.data),
-            known: bytes2bool(&next_field(&mut req.data)),
-            running: bytes2bool(&next_field(&mut req.data)),
-            numerator: String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap(), // XXX we can do better
-            denominator: String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap(),
-            waiting: 0,
-        };
-        if req.ptype == STATUS_RES_UNIQUE {
-            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap();
-        }
-        let tx = self.client_data.status_res_tx();
-        runtime::Handle::current().spawn(async move { tx.send(js).await });
-        Ok(no_response())
-    }
-
-    fn handle_option_res(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
-        /*
-        if let Some(option_call) = self.option_call {
-            option_call(req.data)
-        }
-        */
-        Ok(no_response())
-    }
-
-    fn handle_work_update(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        let mut data = req.data.clone();
-        let handle = next_field(&mut data);
-        let payload = next_field(&mut data);
-        let work_update = {
-            let handle = handle.clone();
-            match req.ptype {
-                WORK_DATA => WorkUpdate::Data {
-                    handle: handle,
-                    payload: payload,
-                },
-                WORK_COMPLETE => WorkUpdate::Complete {
-                    handle: handle,
-                    payload: payload,
-                },
-                WORK_WARNING => WorkUpdate::Warning {
-                    handle: handle,
-                    payload: payload,
-                },
-                WORK_EXCEPTION => WorkUpdate::Exception {
-                    handle: handle,
-                    payload: payload,
-                },
-                WORK_FAIL => WorkUpdate::Fail(handle),
-                WORK_STATUS => {
-                    let numerator: usize = String::from_utf8((&payload).to_vec())
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    let denominator: usize = String::from_utf8(next_field(&mut data).to_vec())
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    WorkUpdate::Status {
-                        handle: handle,
-                        numerator: numerator,
-                        denominator: denominator,
-                    }
-                }
-                _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
-            }
-        };
-        if let Some(tx) = self.client_data.get_sender_by_handle(&handle) {
-            runtime::Handle::current().spawn(async move { tx.send(work_update).await });
-        } else {
-            error!("Received {:?} for unknown job: {:?}", req, handle);
-        };
-        Ok(no_response())
-    }
-
-    fn handle_job_assign(&mut self, req: &Packet) -> Result<Packet, io::Error> {
-        let mut data = req.data.clone();
-        let handle = next_field(&mut data);
-        let function = next_field(&mut data);
-        let payload = next_field(&mut data);
-        let job = WorkerJob {
-            handle: handle,
-            function: function,
-            payload: payload,
-            sink_tx: self.sink_tx.clone(),
-        };
-        let tx = self.client_data.worker_job_tx();
-        runtime::Handle::current().spawn(async move { tx.send(job).await });
-        Ok(no_response())
     }
 }
