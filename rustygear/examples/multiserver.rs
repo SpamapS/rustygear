@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for job in jobs.iter_mut() {
         println!("Response for [{}] is [{:?}]",
             String::from_utf8(job.handle().to_vec()).unwrap(),
-            job.response().await?)
+            job.response().await)
     };
     Ok(())
 }

@@ -22,7 +22,7 @@ use std::time::Duration;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::sink::SinkExt;
 use futures::stream::StreamExt;
-use hashring::HashRing;
+
 use tokio::net::TcpStream;
 use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
@@ -35,6 +35,7 @@ use uuid::Uuid;
 
 use crate::clientdata::ClientData;
 use crate::codec::{Packet, PacketCodec};
+use crate::conn::Connections;
 use crate::constants::*;
 use crate::util::{bytes2bool, new_req, new_res, next_field, no_response};
 
@@ -65,19 +66,17 @@ pub struct JobStatus {
 pub struct Client {
     servers: Vec<Hostname>,
     streams: Arc<Mutex<Vec<Option<TcpStream>>>>,
-    conns: Arc<Mutex<Vec<Arc<Mutex<ClientHandler>>>>>,
-    conns_ring: Arc<Mutex<HashRing<usize>>>, // Values are offsets in conns
-    shutdown_tx: Option<Sender<()>>,
-    shutdown_rx: Option<Receiver<()>>,
+    conns: Arc<Mutex<Connections>>,
     client_id: Option<Bytes>,
-    client_data: Arc<Mutex<ClientData>>,
+    client_data: ClientData,
 }
 
 /// Each individual connection has one of these for handling packets
-struct ClientHandler {
+#[derive(Clone)]
+pub struct ClientHandler {
     client_id: Option<Bytes>,
     sink_tx: Sender<Packet>,
-    client_data: Arc<Mutex<ClientData>>,
+    client_data: ClientData,
 }
 
 /// Return object for submit_ functions.
@@ -140,9 +139,8 @@ pub enum WorkUpdate {
     Fail(Bytes),
 }
 
-async fn send_packet(conn: Arc<Mutex<ClientHandler>>, packet: Packet) -> Result<(), io::Error> {
-    let sink_tx = conn.lock().unwrap().sink_tx.clone();
-    if let Err(e) = sink_tx.send(packet).await {
+async fn send_packet<'a>(conn: &ClientHandler, packet: Packet) -> Result<(), io::Error> {
+    if let Err(e) = conn.sink_tx.send(packet).await {
         error!("Receiver dropped");
         return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
     }
@@ -242,12 +240,9 @@ impl Client {
         Client {
             servers: Vec::new(),
             streams: Arc::new(Mutex::new(Vec::new())),
-            conns: Arc::new(Mutex::new(Vec::new())),
-            conns_ring: Arc::new(Mutex::new(HashRing::new())),
-            shutdown_tx: None,
-            shutdown_rx: None,
+            conns: Arc::new(Mutex::new(Connections::new())),
             client_id: None,
-            client_data: Arc::new(Mutex::new(ClientData::new())),
+            client_data: ClientData::new(),
         }
     }
 
@@ -280,7 +275,6 @@ impl Client {
         let client_id = self.client_id.clone();
         let handler_client_data = self.client_data.clone();
         let connector_conns = self.conns.clone();
-        let connector_conns_ring = self.conns_ring.clone();
         let connector = async move {
             loop {
                 let offset: Option<usize> = crx.recv().await;
@@ -331,13 +325,12 @@ impl Client {
                                         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX pick a good value or const
                                         let tx = tx.clone();
                                         let tx2 = tx.clone();
-                                        let handler = Arc::new(Mutex::new(ClientHandler::new(
+                                        let handler = ClientHandler::new(
                                             &client_id,
                                             tx2,
                                             handler_client_data.clone(),
-                                        )));
+                                        );
                                         connector_conns.lock().unwrap().insert(offset, handler.clone());
-                                        connector_conns_ring.lock().unwrap().add(offset);
                                         let reader_streams = connector_streams.clone();
                                         let reader_ctx = ctx2.clone();
                                         let reader = async move {
@@ -347,7 +340,7 @@ impl Client {
                                                 let response = {
                                                     let handler = handler.clone();
                                                     debug!("Locking handler");
-                                                    let mut handler = handler.lock().unwrap();
+                                                    let mut handler = handler;
                                                     debug!("Locked handler");
                                                     handler.call(frame.unwrap())
                                                 };
@@ -410,19 +403,15 @@ impl Client {
     /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
-        let conn: Arc<Mutex<ClientHandler>> = {
-            if let Some(conn) = self.conns.lock().unwrap().get_mut(0) {
-                conn.clone()
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No connections for echo!",
-                ));
-            }
-        };
-        send_packet(conn, packet).await?;
+        if self.conns.lock().unwrap().len() < 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "No connections for echo!",
+            ));
+        }
+        send_packet(&self.conns.lock().unwrap().get(0).unwrap(), packet).await?;
         debug!("Waiting for echo response");
-        match self.client_data.lock().unwrap().echo_rx().recv().await {
+        match self.client_data.receivers().echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
             None => info!("echo channel closed"),
         };
@@ -484,61 +473,50 @@ impl Client {
             }
             Some(unique) => unique,
         };
-        let conn_index = {
-            let hashable: Vec<u8> = unique.iter().map(|b| *b).collect();
-            *self.conns_ring.lock().unwrap()
-                .get(&hashable)
-                .expect("No connected servers yet!")
-        };
-        let conn = {
-            let mut conns = self.conns.lock().unwrap();
-            if let Some(conn) = conns.get_mut(conn_index) {
-                conn.clone()
-            } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "No connections for submitting jobs.",
-                ));
-            }
-        };
-        /* Pick the conn later */
-        let conn = conn.clone();
         let mut data = BytesMut::with_capacity(2 + function.len() + unique.len() + payload.len()); // 2 for nulls
         data.extend(function.bytes());
         data.put_u8(b'\0');
         data.extend(unique);
         data.put_u8(b'\0');
         data.extend(payload);
-        /* We need this to stay locked until we've gotten a handle back. That way if we're too slow processing
-           the JOB_ASSIGN packets to catch a fast worker that sends  WORK_COMPLETE, we won't try to handle
-           that in the reader until the handle is in senders_by_handle. */
-        let mut client_data = self.client_data.lock().unwrap();
         let packet = new_req(ptype, data.freeze());
         {
-            let conn = conn.clone();
+            let mut conns = self.conns.lock().unwrap();
+            let conn  = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
+                None => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "No connections for submitting jobs.",
+                    ));
+                },
+                Some(conn) => conn
+            };
             send_packet(conn, packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
-        if let Some(handle) = self.client_data.lock().unwrap().job_created_rx().recv().await {
+        let mut client_data = self.client_data.clone();
+        let submit_result = if let Some(handle) = client_data.receivers().job_created_rx.recv().await {
             let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
-            client_data.set_sender_by_handle(handle.clone(), tx.clone());
+            self.client_data.set_sender_by_handle(handle.clone(), tx.clone());
             Ok(ClientJob::new(handle, rx))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
-        }
+        };
+        submit_result
     }
 
     /// Sends a GET_STATUS packet and then returns the STATUS_RES in a [JobStatus]
     pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
-        let conn: Arc<Mutex<ClientHandler>> = {
-            let mut conns = self.conns.lock().unwrap();
-            conns.get_mut(0).unwrap().clone()
-        };
-        let mut payload = BytesMut::with_capacity(handle.len());
-        payload.extend(handle);
-        let status_req = new_req(GET_STATUS, payload.freeze());
-        send_packet(conn, status_req).await?;
-        if let Some(status_res) = self.client_data.lock().unwrap().status_res_rx().recv().await {
+        // TODO: loop all conns or keep track of mapping?
+        {
+            let conns = self.conns.lock().unwrap();
+            let conn = conns.get(0).expect("At least one conn");
+            let mut payload = BytesMut::with_capacity(handle.len());
+            payload.extend(handle);
+            let status_req = new_req(GET_STATUS, payload.freeze());
+            send_packet(conn, status_req).await?;
+        }
+        if let Some(status_res) = self.client_data.receivers().status_res_rx.recv().await {
             Ok(status_res)
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No status to report!"))
@@ -555,26 +533,23 @@ impl Client {
     ///
     /// See examples/worker.rs for more information.
     ///
-    pub async fn can_do<F>(self, function: &str, func: F) -> Result<Self, io::Error>
+    pub async fn can_do<F>(mut self, function: &str, func: F) -> Result<Self, io::Error>
     where
         F: FnMut(&mut WorkerJob) -> Result<Vec<u8>, io::Error> + Send + 'static,
     {
         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
-            let mut conns = self.conns.lock().unwrap();
-            for conn in conns.iter_mut() {
+            for conn in self.conns.lock().unwrap().iter_mut() {
                 {
-                    let conn = conn.lock().unwrap();
-                    let mut client_data = conn.client_data.lock().unwrap();
                     let mut k = Vec::with_capacity(function.len());
                     k.extend_from_slice(function.as_bytes());
                     // Same tx for all jobs, the jobs themselves will have a response conn ref
-                    client_data.set_jobs_tx_by_func(k, tx.clone());
+                    self.client_data.set_jobs_tx_by_func(k, tx.clone());
                 }
                 let mut payload = BytesMut::with_capacity(function.len());
                 payload.extend(function.bytes());
                 let can_do = new_req(CAN_DO, payload.freeze());
-                send_packet(conn.clone(), can_do).await?;
+                send_packet(&conn, can_do).await?;
             }
         }
         let func_arc = Arc::new(Mutex::new(func));
@@ -615,15 +590,14 @@ impl Client {
     /// See examples/worker.rs for more information on how to use it.
     pub async fn work(self) -> Result<(), io::Error> {
         loop {
-            let job = self.client_data.lock().unwrap().worker_job_rx().try_recv();
+            let job = self.client_data.receivers().worker_job_rx.try_recv();
             let job = match job {
                 Err(TryRecvError::Empty) => {
-                    let conns = self.conns.lock().unwrap();
-                    for conn in conns.iter() {
+                    for conn in self.conns.lock().unwrap().iter() {
                         let packet = new_req(GRAB_JOB, Bytes::new());
-                        send_packet(conn.clone(), packet).await?;
+                        send_packet(conn, packet).await?;
                     }
-                    match self.client_data.lock().unwrap().worker_job_rx().recv().await {
+                    match self.client_data.receivers().worker_job_rx.recv().await {
                         Some(job) => job,
                         None => {
                             return Err(io::Error::new(
@@ -641,7 +615,7 @@ impl Client {
                 }
                 Ok(job) => job,
             };
-            let tx = match self.client_data.lock().unwrap().get_jobs_tx_by_func(&Vec::from(job.function())) {
+            let tx = match self.client_data.get_jobs_tx_by_func(&Vec::from(job.function())) {
                 None => {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
@@ -662,25 +636,15 @@ impl Client {
     /// Gets a single error that might have come from the server. The tuple returned is (code,
     /// message)
     pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, io::Error> {
-        Ok(self.client_data.lock().unwrap().error_rx().recv().await)
-    }
-}
-
-impl Drop for Client {
-    fn drop(&mut self) {
-        if let Some(shutdown_tx) = &self.shutdown_tx {
-            if let Err(e) = shutdown_tx.blocking_send(()) {
-                error!("Shutdown receiver was already destroyed! {}", e);
-            }
-        }
+        Ok(self.client_data.receivers().error_rx.recv().await)
     }
 }
 
 impl ClientHandler {
-    fn new(
+    fn new (
         client_id: &Option<Bytes>,
         sink_tx: Sender<Packet>,
-        client_data: Arc<Mutex<ClientData>>,
+        client_data: ClientData,
     ) -> ClientHandler {
         ClientHandler {
             client_id: client_id.clone(),
@@ -725,7 +689,7 @@ impl ClientHandler {
 
     fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Echo response received: {:?}", req.data);
-        let tx = self.client_data.lock().unwrap().echo_tx();
+        let tx = self.client_data.echo_tx();
         let data = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(data).await });
         Ok(no_response())
@@ -733,7 +697,7 @@ impl ClientHandler {
 
     fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
         info!("Job Created: {:?}", req);
-        let tx = self.client_data.lock().unwrap().job_created_tx();
+        let tx = self.client_data.job_created_tx();
         let handle = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(handle).await });
         Ok(no_response())
@@ -743,7 +707,7 @@ impl ClientHandler {
         let mut data = req.data.clone();
         let code = next_field(&mut data);
         let text = next_field(&mut data);
-        let tx = self.client_data.lock().unwrap().error_tx();
+        let tx = self.client_data.error_tx();
         runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
         Ok(no_response())
     }
@@ -770,7 +734,7 @@ impl ClientHandler {
                 .parse()
                 .unwrap();
         }
-        let tx = self.client_data.lock().unwrap().status_res_tx();
+        let tx = self.client_data.status_res_tx();
         runtime::Handle::current().spawn(async move { tx.send(js).await });
         Ok(no_response())
     }
@@ -826,8 +790,7 @@ impl ClientHandler {
                 _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
             }
         };
-        let client_data = self.client_data.lock().unwrap();
-        if let Some(tx) = client_data.get_sender_by_handle(&handle) {
+        if let Some(tx) = self.client_data.get_sender_by_handle(&handle) {
             runtime::Handle::current().spawn(async move { tx.send(work_update).await });
         } else {
             error!("Received {:?} for unknown job: {:?}", req, handle);
@@ -846,7 +809,7 @@ impl ClientHandler {
             payload: payload,
             sink_tx: self.sink_tx.clone(),
         };
-        let tx = self.client_data.lock().unwrap().worker_job_tx();
+        let tx = self.client_data.worker_job_tx();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
         Ok(no_response())
     }
