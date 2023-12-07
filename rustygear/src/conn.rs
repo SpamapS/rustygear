@@ -5,7 +5,7 @@ use hashring::HashRing;
 use crate::client::ClientHandler;
 
 pub struct Connections {
-    conns: Vec<ClientHandler>,
+    conns: Vec<Option<ClientHandler>>,
     ring: HashRing<usize>,
 }
 
@@ -18,7 +18,10 @@ impl Connections {
     }
 
     pub fn insert(&mut self, offset: usize, handler: ClientHandler) {
-        self.conns.insert(offset, handler);
+        if offset > self.conns.len() {
+            (0..offset).for_each(|_| self.conns.push(None))
+        }
+        self.conns.insert(offset, Some(handler));
         self.ring.add(offset);
     }
 
@@ -27,21 +30,33 @@ impl Connections {
     }
 
     pub fn get(&self, index: usize) -> Option<&ClientHandler> {
-        self.conns.get(index)
+        match self.conns.get(index) {
+            None => None,
+            Some(c) => match c {
+                None => None,
+                Some(ref c) => Some(c)
+            }
+        }
     }
 
     pub fn get_hashed_conn(&mut self, hashable: &Vec<u8>) -> Option<&mut ClientHandler> {
-        if let Some(ring_index) = self.ring.get(hashable) {
-            return self.conns.get_mut(*ring_index)
+        match self.ring.get(hashable) {
+            None => None,
+            Some(ring_index) => match self.conns.get_mut(*ring_index) {
+                None => None,
+                Some(c) => match c {
+                    None => None,
+                    Some(c) => Some(c)
+                },
+            }
         }
-        None
     }
 
-    pub fn iter_mut(&mut self) -> IterMut<ClientHandler> {
+    pub fn iter_mut(&mut self) -> IterMut<Option<ClientHandler>> {
         self.conns.iter_mut()
     }
 
-    pub fn iter(&self) -> Iter<ClientHandler> {
+    pub fn iter(&self) -> Iter<Option<ClientHandler>> {
         self.conns.iter()
     }
 }

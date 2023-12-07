@@ -1,4 +1,5 @@
 use core::fmt;
+use std::fmt::Display;
 /*
  * Copyright 2020 Clint Byrum
  *
@@ -53,6 +54,16 @@ pub struct JobStatus {
     numerator: u32,
     denominator: u32,
     waiting: u32,
+}
+
+impl Display for JobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "JobStatus {{ handle: {}, known: {}, running: {}", String::from_utf8_lossy(&self.handle), self.known, self.running)?;
+        if self.denominator > 0 {
+            write!(f, " {}/{}", self.numerator, self.denominator)?;
+        }
+        write!(f, " {} waiters }}", self.waiting)
+    }
 }
 
 /// Client for interacting with Gearman service
@@ -165,9 +176,10 @@ impl ClientJob {
     /// Use this in clients to wait for a response on a job that was submitted. This will block
     /// forever or error if used on a background job.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
-        match self.response_rx.recv().await {
-            None => Err(io::Error::new(io::ErrorKind::Other, "Nothing to receive.")),
-            Some(workupdate) => Ok(workupdate),
+        if let Some(workupdate) = self.response_rx.recv().await {
+            Ok(workupdate)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "Nothing to receive."))
         }
     }
 }
@@ -494,7 +506,7 @@ impl Client {
             send_packet(conn, packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
-        let mut client_data = self.client_data.clone();
+        let client_data = self.client_data.clone();
         let submit_result = if let Some(handle) = client_data.receivers().job_created_rx.recv().await {
             let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
             self.client_data.set_sender_by_handle(handle.clone(), tx.clone());
@@ -539,7 +551,7 @@ impl Client {
     {
         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
-            for conn in self.conns.lock().unwrap().iter_mut() {
+            for conn in self.conns.lock().unwrap().iter_mut().filter_map(|c| c.to_owned()) {
                 {
                     let mut k = Vec::with_capacity(function.len());
                     k.extend_from_slice(function.as_bytes());
@@ -593,9 +605,9 @@ impl Client {
             let job = self.client_data.receivers().worker_job_rx.try_recv();
             let job = match job {
                 Err(TryRecvError::Empty) => {
-                    for conn in self.conns.lock().unwrap().iter() {
+                    for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
                         let packet = new_req(GRAB_JOB, Bytes::new());
-                        send_packet(conn, packet).await?;
+                        send_packet(&conn, packet).await?;
                     }
                     match self.client_data.receivers().worker_job_rx.recv().await {
                         Some(job) => job,

@@ -14,11 +14,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Status {:?}", status);
     let mut job = client.submit("reverse", b"bloop").await?;
     println!("Submitted {:?}", job.handle());
-    let response = job.response().await;
+    let response = job.response().await?;
     println!("Got Back {:?}", response);
     let mut job = client.submit_unique("reverse", b"bloop1", b"bloop").await?;
     println!("Submitted unique {:?}", job.handle());
-    let response = job.response().await;
+    let response = job.response().await?;
     println!("Got Back {:?}", response);
     Ok(())
 }
