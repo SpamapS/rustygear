@@ -1,15 +1,45 @@
-use std::{fmt::Debug, slice::{Iter, IterMut}, io};
+use std::{fmt::{Debug, Display}, slice::{Iter, IterMut}, io};
 
 use bytes::Bytes;
 use hashring::HashRing;
 use tokio::{sync::mpsc::Sender, runtime};
 
-use crate::{codec::Packet, clientdata::ClientData, constants::*, util::{new_req, no_response, next_field, bytes2bool}, client::{JobStatus, WorkUpdate, WorkerJob}};
+use crate::{codec::Packet, clientdata::ClientData, constants::*, util::{new_req, no_response, next_field, bytes2bool}, client::{JobStatus, WorkUpdate, WorkerJob, Hostname}};
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ServerHandle {
+    server: Hostname,
+    handle: Bytes,
+}
+
+impl ServerHandle {
+    pub fn new(server: Hostname, handle: Bytes) -> ServerHandle {
+        ServerHandle {
+            server,
+            handle,
+        }
+    }
+
+    pub fn server(&self) -> &Hostname {
+        &self.server
+    }
+
+    pub fn handle(&self) -> &Bytes {
+        &self.handle
+    }
+}
+
+impl Display for ServerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Debug::fmt(self, f)
+    }
+}
 
 /// Each individual connection has one of these for handling packets
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConnHandler {
     client_id: Option<Bytes>,
+    server: Hostname,
     sink_tx: Sender<Packet>,
     client_data: ClientData,
 }
@@ -17,14 +47,20 @@ pub struct ConnHandler {
 impl ConnHandler {
     pub fn new (
         client_id: &Option<Bytes>,
+        server: Hostname,
         sink_tx: Sender<Packet>,
         client_data: ClientData,
     ) -> ConnHandler {
         ConnHandler {
             client_id: client_id.clone(),
-            sink_tx: sink_tx,
-            client_data: client_data,
+            server,
+            sink_tx,
+            client_data,
         }
+    }
+
+    pub fn server(&self) -> &Hostname {
+        &self.server
     }
     
     pub async fn send_packet(&self, packet: Packet) -> Result<(), io::Error> {
@@ -82,7 +118,8 @@ impl ConnHandler {
         info!("Job Created: {:?}", req);
         let tx = self.client_data.job_created_tx();
         let handle = req.data.clone();
-        runtime::Handle::current().spawn(async move { tx.send(handle).await });
+        let server = self.server.clone();
+        runtime::Handle::current().spawn(async move { tx.send(ServerHandle::new(server, handle)).await });
         Ok(no_response())
     }
 
@@ -173,10 +210,11 @@ impl ConnHandler {
                 _ => unreachable!("handle_work_status called with wrong ptype: {:?}", req),
             }
         };
-        if let Some(tx) = self.client_data.get_sender_by_handle(&handle) {
+        let server_handle = ServerHandle::new(self.server().clone(), handle);
+        if let Some(tx) = self.client_data.get_sender_by_handle(&server_handle) {
             runtime::Handle::current().spawn(async move { tx.send(work_update).await });
         } else {
-            error!("Received {:?} for unknown job: {:?}", req, handle);
+            error!("Received {:?} for unknown job: {:?}", req, server_handle);
         };
         Ok(no_response())
     }
@@ -195,6 +233,13 @@ impl ConnHandler {
         let tx = self.client_data.worker_job_tx();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
         Ok(no_response())
+    }
+}
+
+impl Debug for ConnHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // client_data is too big to display
+        f.debug_struct("ConnHandler").field("client_id", &self.client_id).field("server", &self.server).field("sink_tx", &self.sink_tx).finish()
     }
 }
 

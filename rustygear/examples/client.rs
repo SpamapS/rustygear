@@ -5,7 +5,8 @@ use rustygear::client::Client;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let mut client = Client::new().add_server("127.0.0.1:4730").connect().await?;
+    let server = "127.0.0.1:4730";
+    let mut client = Client::new().add_server(server).connect().await?;
     println!("Connected!");
     println!("Echo: {:?}", client.echo(b"blah").await);
     let job = client.submit_background("reverse", b"abcdefg").await?;

@@ -1,6 +1,5 @@
 //use tokio::prelude::*;
 
-use bytes::Bytes;
 use rustygear::client::Client;
 
 #[tokio::main]
@@ -16,11 +15,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let payload = format!("payload{}", x);
         jobs.push(client.submit("reverse", payload.as_bytes()).await?);
     }
-    println!("Submitted {:?}", jobs.iter().map(|job| job.handle()).collect::<Vec<&Bytes>>());
+    println!("Submitted {}", jobs.iter().map(|j| format!("{}", j)).collect::<String>());
     for job in jobs.iter_mut() {
-        println!("Response for [{}] is [{:?}]",
-            String::from_utf8(job.handle().to_vec()).unwrap(),
-            job.response().await)
+        let response = job.response().await;
+        println!("Response for [{:?}] is [{:?}]",
+            job.handle(),
+            response)
     };
     Ok(())
 }

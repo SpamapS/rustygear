@@ -3,12 +3,14 @@ use std::{collections::HashMap, sync::{Arc, Mutex, MutexGuard, RwLock}};
 use bytes::Bytes;
 use tokio::sync::mpsc::{Sender, Receiver, channel};
 
-use crate::client::{WorkUpdate, WorkerJob, JobStatus};
+use crate::{client::{WorkUpdate, WorkerJob, JobStatus}, conn::ServerHandle};
+
+pub type JobCreated = ServerHandle;
 
 #[derive(Debug)]
 pub struct ClientReceivers {
     pub echo_rx: Receiver<Bytes>,
-    pub job_created_rx: Receiver<Bytes>,
+    pub job_created_rx: Receiver<JobCreated>,
     pub status_res_rx: Receiver<JobStatus>,
     pub error_rx: Receiver<(Bytes, Bytes)>,
     pub worker_job_rx: Receiver<WorkerJob>,
@@ -16,10 +18,10 @@ pub struct ClientReceivers {
 
 #[derive(Debug)]
 struct ClientSenders {
-    pub senders_by_handle: HashMap<Bytes, Sender<WorkUpdate>>,
+    pub senders_by_handle: HashMap<ServerHandle, Sender<WorkUpdate>>,
     pub jobs_tx_by_func: HashMap<Vec<u8>, Sender<WorkerJob>>,
     pub echo_tx: Sender<Bytes>,
-    pub job_created_tx: Sender<Bytes>,
+    pub job_created_tx: Sender<JobCreated>,
     pub status_res_tx: Sender<JobStatus>,
     pub error_tx: Sender<(Bytes, Bytes)>,
     pub worker_job_tx: Sender<WorkerJob>,
@@ -28,7 +30,7 @@ struct ClientSenders {
 impl ClientSenders {
     pub fn new(
         echo_tx: Sender<Bytes>,
-        job_created_tx: Sender<Bytes>,
+        job_created_tx: Sender<JobCreated>,
         status_res_tx: Sender<JobStatus>,
         error_tx: Sender<(Bytes, Bytes)>,
         worker_job_tx: Sender<WorkerJob>,
@@ -60,7 +62,7 @@ impl Clone for ClientData {
 impl ClientReceivers {
     pub fn new(
         echo_rx: Receiver<Bytes>,
-        job_created_rx: Receiver<Bytes>,
+        job_created_rx: Receiver<JobCreated>,
         status_res_rx: Receiver<JobStatus>,
         error_rx: Receiver<(Bytes, Bytes)>,
         worker_job_rx: Receiver<WorkerJob>,
@@ -99,50 +101,30 @@ impl ClientData {
         self.senders.read().unwrap().echo_tx.clone()
     }
 
-    /*pub fn echo_rx(&mut self) -> Receiver<Bytes> {
-        self.receivers.lock().unwrap().echo_rx
-    }*/
-
-    pub fn job_created_tx(&self) -> Sender<Bytes> {
+    pub fn job_created_tx(&self) -> Sender<JobCreated> {
         self.senders.read().unwrap().job_created_tx.clone()
     }
-
-    /*pub fn job_created_rx(&mut self) -> &mut Receiver<Bytes> {
-        &mut self.receivers.lock().unwrap().job_created_rx
-    }*/
 
     pub fn error_tx(&self) -> Sender<(Bytes, Bytes)> {
         self.senders.read().unwrap().error_tx.clone()
     }
 
-    /*pub fn error_rx(&mut self) -> &mut Receiver<(Bytes, Bytes)> {
-        &mut self.receivers.lock().unwrap().error_rx
-    }*/
-
     pub fn status_res_tx(&self) -> Sender<JobStatus> {
         self.senders.read().unwrap().status_res_tx.clone()
     }
-
-    /*pub fn status_res_rx(&mut self) -> &mut Receiver<JobStatus> {
-        &mut self.receivers.lock().unwrap().status_res_rx
-    }*/
 
     pub fn worker_job_tx(&self) -> Sender<WorkerJob> {
         self.senders.read().unwrap().worker_job_tx.clone()
     }
 
-    /*pub fn worker_job_rx(&mut self) -> &mut Receiver<WorkerJob> {
-        &mut self.receivers.lock().unwrap().worker_job_rx
-    }*/
-
-    pub fn get_sender_by_handle(&self, handle: &Bytes) -> Option<Sender<WorkUpdate>> {
+    pub fn get_sender_by_handle(&self, handle: &ServerHandle) -> Option<Sender<WorkUpdate>> {
         match self.senders.read().unwrap().senders_by_handle.get(handle) {
             None => None,
             Some(sender) => Some(sender.clone()),
         }
     }
 
-    pub fn set_sender_by_handle(&mut self, handle: Bytes, tx: Sender<WorkUpdate>) {
+    pub fn set_sender_by_handle(&mut self, handle: ServerHandle, tx: Sender<WorkUpdate>) {
         self.senders.write().unwrap().senders_by_handle.insert(handle, tx);
     }
 

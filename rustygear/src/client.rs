@@ -36,11 +36,11 @@ use uuid::Uuid;
 
 use crate::clientdata::ClientData;
 use crate::codec::{Packet, PacketCodec};
-use crate::conn::{Connections, ConnHandler};
+use crate::conn::{Connections, ConnHandler, ServerHandle};
 use crate::constants::*;
 use crate::util::{new_req, new_res};
 
-type Hostname = String;
+pub type Hostname = String;
 
 const CLIENT_CHANNEL_BOUND_SIZE: usize = 100;
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(30000);
@@ -85,7 +85,7 @@ pub struct Client {
 /// Return object for submit_ functions.
 #[derive(Debug)]
 pub struct ClientJob {
-    handle: Bytes,
+    handle: ServerHandle,
     response_rx: Receiver<WorkUpdate>,
 }
 
@@ -98,7 +98,7 @@ impl fmt::Display for ClientJob {
         write!(
             f,
             "ClientJob[{}]",
-            String::from_utf8(self.handle.to_vec()).unwrap()
+            self.handle,
         )
     }
 }
@@ -143,7 +143,7 @@ pub enum WorkUpdate {
 }
 
 impl ClientJob {
-    fn new(handle: Bytes, response_rx: Receiver<WorkUpdate>) -> ClientJob {
+    fn new(handle: ServerHandle, response_rx: Receiver<WorkUpdate>) -> ClientJob {
         ClientJob {
             handle: handle,
             response_rx: response_rx,
@@ -151,7 +151,7 @@ impl ClientJob {
     }
 
     /// returns the job handle
-    pub fn handle(&self) -> &Bytes {
+    pub fn handle(&self) -> &ServerHandle {
         &self.handle
     }
 
@@ -319,6 +319,7 @@ impl Client {
                                         let tx2 = tx.clone();
                                         let handler = ConnHandler::new(
                                             &client_id,
+                                            server.into(),
                                             tx2,
                                             handler_client_data.clone(),
                                         );
@@ -506,13 +507,22 @@ impl Client {
     }
 
     /// Sends a GET_STATUS packet and then returns the STATUS_RES in a [JobStatus]
-    pub async fn get_status(&mut self, handle: &[u8]) -> Result<JobStatus, io::Error> {
+    pub async fn get_status(&mut self, handle: &ServerHandle) -> Result<JobStatus, io::Error> {
         // TODO: loop all conns or keep track of mapping?
         {
             let conns = self.conns.lock().unwrap();
-            let conn = conns.get(0).expect("At least one conn");
-            let mut payload = BytesMut::with_capacity(handle.len());
-            payload.extend(handle);
+            let conn = conns.iter().find(
+                |c| {
+                    if let Some(c) = c {
+                        c.server() == handle.server()
+                     } else { 
+                        false    
+                    }
+                })
+                .expect("At least one conn")
+                .as_ref().unwrap();
+            let mut payload = BytesMut::with_capacity(handle.handle().len());
+            payload.extend(handle.handle());
             let status_req = new_req(GET_STATUS, payload.freeze());
             conn.send_packet(status_req).await?;
         }
