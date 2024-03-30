@@ -1,5 +1,6 @@
 use std::collections::{HashMap, BTreeMap};
 use std::convert::TryInto;
+use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -31,7 +32,7 @@ const MAX_UNHANDLED_OUT_FRAMES: usize = 1024;
 const SHUTDOWN_BUFFER_SIZE: usize = 4;
 
 impl GearmanServer {
-    pub fn run(addr: SocketAddr) {
+    pub fn run(addr: SocketAddr) -> io::Result<()> {
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
@@ -40,9 +41,12 @@ impl GearmanServer {
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
         let rt = runtime::Runtime::new().unwrap();
         rt.block_on(async move {
-            let listener = TcpListener::bind(&addr).await.unwrap();
+            let listener = match TcpListener::bind(&addr).await {
+                Err(e) => return Err(e),
+                Ok(listener) => listener
+            };
             let shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-            loop {
+            Ok(loop {
                 let shutdown = shutdown.clone();
                 if shutdown.load(Ordering::Relaxed) {
                     break;
@@ -155,7 +159,7 @@ impl GearmanServer {
                         error!("{}", e);
                     }
                 }
-            }
+            })
         })
     }
 }

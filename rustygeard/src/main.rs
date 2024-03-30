@@ -27,5 +27,8 @@ fn main() {
 
     info!("Binding to {}", listen);
     let address = listen.parse().unwrap();
-    GearmanServer::run(address);
+    if let Err(e) = GearmanServer::run(address) {
+        eprintln!("Error: {}", e);
+        std::process::exit(-1)
+    }
 }

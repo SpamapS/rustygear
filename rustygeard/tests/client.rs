@@ -10,7 +10,6 @@ async fn connect(addr: &SocketAddr) -> Client {
 
 #[tokio::test]
 async fn test_client_connects() {
-    std::env::set_var("RUST_LOG", "debug");
     let server = start_test_server().unwrap();
     connect(server.addr()).await;
     println!("Connected");
@@ -18,6 +17,8 @@ async fn test_client_connects() {
 
 #[tokio::test]
 async fn test_client_echo() {
+    // This is here as an example of how to use env_logger to watch parts of the test runex
+    //std::env::set_var("RUST_LOG", "rustygear::client=debug");
     let server = start_test_server().unwrap();
     let mut client = connect(server.addr()).await;
     client.echo(b"Hello World").await.expect("Echo Failed");

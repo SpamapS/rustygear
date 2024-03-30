@@ -1,7 +1,6 @@
 use std::net::{SocketAddr, TcpStream};
 use std::io::Write;
 use std::sync::mpsc::{SyncSender, Receiver, sync_channel};
-use std::panic::catch_unwind;
 use std::time::Duration;
 
 use crate::server::GearmanServer;
@@ -33,14 +32,15 @@ impl Drop for ServerGuard {
 }
 
 pub fn start_test_server() -> Option<ServerGuard> {
+    env_logger::init();
     for port in 30000..40000 {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
         let serv = std::thread::spawn(move || {
-            match catch_unwind(move || GearmanServer::run(addr.clone())) {
+            match GearmanServer::run(addr.clone()) {
                 Ok(_) => info!("Server exited cleanly."),
                 Err(e) => {
-                    println!("Server paniced: {:?}", e);
+                    println!("Server failed: {:?}", e);
                     tx.send(true).unwrap();
                 },
             };
