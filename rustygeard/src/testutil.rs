@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use crate::server::GearmanServer;
 
-pub fn start_test_server() -> Option<TcpStream> {
-    let mut c: Option<TcpStream> = None;
+pub fn start_test_server() -> Option<SocketAddr> {
+    let mut server_addr: Option<SocketAddr> = None;
     for port in 30000..40000 {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
@@ -28,9 +28,10 @@ pub fn start_test_server() -> Option<TcpStream> {
             },
         };
         println!("Server started!");
-        c = Some(TcpStream::connect(&addr).unwrap());
+        TcpStream::connect(&addr).unwrap();
         println!("we connected");
+        server_addr = Some(addr);
         break;
     }
-    return c;
+    return server_addr;
 }
