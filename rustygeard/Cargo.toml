@@ -1,7 +1,7 @@
 [package]
 name = "rustygeard"
 description = "An experimental, full-featured gearman server."
-version = "0.10.0"
+version = "0.11.0"
 authors = ["Clint Byrum <clint@fewbar.com>"]
 license = "Apache-2.0"
 edition = "2018"
@@ -10,7 +10,7 @@ homepage = "https://github.com/SpamapS/rustygear"
 
 [dependencies]
 bytes = ">=1.1.0"
-rustygear = { path = "../rustygear" , version = ">= 0.10.0" }
+rustygear = { path = "../rustygear" , version = ">= 0.11.0" }
 log = ">=0.4.8"
 env_logger = { version = ">=0.10.1" , features = ["auto-color", "humantime"] }
 tokio = { version = "1.15.0", features = ["full"] }
