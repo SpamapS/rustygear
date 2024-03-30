@@ -32,6 +32,7 @@ impl Drop for ServerGuard {
 }
 
 pub fn start_test_server() -> Option<ServerGuard> {
+    let _ = env_logger::builder().is_test(true).try_init();
     for port in 30000..40000 {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
@@ -39,7 +40,7 @@ pub fn start_test_server() -> Option<ServerGuard> {
             match GearmanServer::run(addr.clone()) {
                 Ok(_) => info!("Server exited cleanly."),
                 Err(e) => {
-                    println!("Server failed: {:?}", e);
+                    error!("Server failed: {:?}", e);
                     tx.send(true).unwrap();
                 },
             };
@@ -47,12 +48,12 @@ pub fn start_test_server() -> Option<ServerGuard> {
         match rx.recv_timeout(Duration::from_millis(500)) {
             Err(_e) => {},
             Ok(_failed) => {
-                println!("Failed to listen on port {}", port);
+                warn!("Failed to listen on port {}", port);
                 serv.join().expect("Server thread did not panic or exit");
                 continue;
             },
         };
-        println!("Server started!");
+        info!("Server started!");
         return Some(ServerGuard::connect(addr));
     }
     return None;

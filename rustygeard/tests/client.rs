@@ -12,7 +12,6 @@ async fn connect(addr: &SocketAddr) -> Client {
 async fn test_client_connects() {
     let server = start_test_server().unwrap();
     connect(server.addr()).await;
-    println!("Connected");
 }
 
 #[tokio::test]
