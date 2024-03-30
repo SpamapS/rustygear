@@ -32,7 +32,6 @@ impl Drop for ServerGuard {
 }
 
 pub fn start_test_server() -> Option<ServerGuard> {
-    env_logger::init();
     for port in 30000..40000 {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
