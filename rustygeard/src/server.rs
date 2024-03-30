@@ -106,7 +106,11 @@ impl GearmanServer {
                                 let mut workers_by_conn_id = workers_by_conn_id_r.lock().unwrap();
                                 workers_by_conn_id.remove(&conn_id);
                             }
-                            reader_tx.send(new_req(NOOP, Bytes::new())).await.unwrap();
+                            // This NOOP is necessary sometimes to wake up the connection, but if the
+                            // Client shuts down it is likely to fail.
+                            if let Err(e) = reader_tx.send(new_req(NOOP, Bytes::new())).await {
+                                debug!("Client shut down connection before NOOP: {:?}", e);
+                            }
                             drop(reader_tx);
                             drop(service);
                         };

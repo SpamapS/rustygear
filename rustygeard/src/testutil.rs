@@ -38,7 +38,7 @@ pub fn start_test_server() -> Option<ServerGuard> {
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
         let serv = std::thread::spawn(move || {
             match catch_unwind(move || GearmanServer::run(addr.clone())) {
-                Ok(_) => unreachable!(),
+                Ok(_) => info!("Server exited cleanly."),
                 Err(e) => {
                     println!("Server paniced: {:?}", e);
                     tx.send(true).unwrap();
