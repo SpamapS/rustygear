@@ -22,3 +22,19 @@ async fn test_client_echo() {
     let mut client = connect(server.addr()).await;
     client.echo(b"Hello World").await.expect("Echo Failed");
 }
+
+#[tokio::test]
+async fn test_client_submit() {
+    let server = start_test_server().unwrap();
+    let mut client = connect(server.addr()).await;
+    let job = client
+        .submit("testfunc", b"aaaaa")
+        .await
+        .expect("Submit job should return a client job");
+    assert!(job.handle().handle().len() > 0);
+    let ujob = client
+        .submit_unique("testunique", b"12345", b"bbbbb")
+        .await
+        .expect("Submit unique should return a client job");
+    assert!(ujob.handle().handle().len() > 0);
+}
