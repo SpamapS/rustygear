@@ -1,12 +1,38 @@
 use std::net::{SocketAddr, TcpStream};
+use std::io::Write;
 use std::sync::mpsc::{SyncSender, Receiver, sync_channel};
 use std::panic::catch_unwind;
 use std::time::Duration;
 
 use crate::server::GearmanServer;
 
-pub fn start_test_server() -> Option<SocketAddr> {
-    let mut server_addr: Option<SocketAddr> = None;
+pub struct ServerGuard {
+    addr: SocketAddr,
+    admin_socket: TcpStream
+}
+
+impl ServerGuard {
+    pub fn connect(addr: SocketAddr) -> ServerGuard {
+        ServerGuard {
+            addr: addr,
+            admin_socket: TcpStream::connect(addr).expect("Could not connect"),
+        }
+    }
+
+    pub fn addr(&self) -> &SocketAddr {
+        &self.addr
+    }
+}
+
+static SHUTDOWN_COMMAND: &[u8] = b"shutdown\n";
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        self.admin_socket.write_all(SHUTDOWN_COMMAND).expect("could not send shutdown");
+    }
+}
+
+pub fn start_test_server() -> Option<ServerGuard> {
     for port in 30000..40000 {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
@@ -28,10 +54,7 @@ pub fn start_test_server() -> Option<SocketAddr> {
             },
         };
         println!("Server started!");
-        TcpStream::connect(&addr).unwrap();
-        println!("we connected");
-        server_addr = Some(addr);
-        break;
+        return Some(ServerGuard::connect(addr));
     }
-    return server_addr;
+    return None;
 }

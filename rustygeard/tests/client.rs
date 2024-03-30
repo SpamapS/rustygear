@@ -1,19 +1,24 @@
-use std::net::Shutdown;
+use std::net::SocketAddr;
 
 use rustygear::client::Client;
 use rustygeard::testutil::start_test_server;
-use tokio::{net::TcpStream, io::AsyncWriteExt};
+
+async fn connect(addr: &SocketAddr) -> Client {
+    let client = Client::new().add_server(&addr.to_string());
+    client.connect().await.expect("Failed to connect to serve")
+}
 
 #[tokio::test]
 async fn test_client_connects() {
     std::env::set_var("RUST_LOG", "debug");
-    let server_addr = start_test_server().unwrap();
-    println!("Server created: {:?}", server_addr);
-    let client = Client::new().add_server(format!("{}", server_addr).as_str());
-    println!("Connecting to server");
-    client.connect().await.expect("Failed to connect");
+    let server = start_test_server().unwrap();
+    connect(server.addr()).await;
     println!("Connected");
-    let mut csocket = TcpStream::connect(server_addr).await.expect("Could not connect");
-    csocket.write(b"shutdown\n").await.expect("could not write shutdown");
-    println!("Wrote shutdown");
+}
+
+#[tokio::test]
+async fn test_client_echo() {
+    let server = start_test_server().unwrap();
+    let mut client = connect(server.addr()).await;
+    client.echo(b"Hello World").await.expect("Echo Failed");
 }
