@@ -14,9 +14,9 @@ rustygear = { path = "../rustygear" , version = ">= 0.11.0" }
 log = ">=0.4.8"
 env_logger = { version = ">=0.10.1" , features = ["auto-color", "humantime"] }
 tokio = { version = "1.37.0", features = ["full"] }
-tokio-util = { version = "0.6.10", features = ["codec"] }
+tokio-util = { version = "0.7.10", features = ["codec"] }
 tower-service = "0.3"
 futures = "0.3"
 wrappinghashset = ">=0.4.1"
-clap = "2.34"
+clap = { version = "4.5" , features = ["cargo"] }
 futures-sink = "0.3"
