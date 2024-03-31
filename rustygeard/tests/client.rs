@@ -67,7 +67,7 @@ async fn test_client_submit() {
         assert!(response_handle == job.handle().handle());
         assert!(String::from_utf8_lossy(&response_payload) == "worker saw aaaaa");
     } else {
-        panic!("matches macro does not work as expected");
+        panic!("Got unexpected WorkUpdate for job: {:?}", response);
     }
     let ujob = client
         .submit_unique("testunique", b"12345", b"bbbbb")
