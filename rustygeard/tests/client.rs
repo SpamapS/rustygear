@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use rustygear::client::Client;
+use rustygear::client::{Client, WorkUpdate};
 use rustygeard::testutil::start_test_server;
 
 async fn connect(addr: &SocketAddr) -> Client {
@@ -32,6 +32,43 @@ async fn test_client_submit() {
         .await
         .expect("Submit job should return a client job");
     assert!(job.handle().handle().len() > 0);
+
+    let worker = connect(server.addr()).await;
+    worker
+        .can_do("testfunc", |workerjob| {
+            Ok(format!(
+                "worker saw {}",
+                String::from_utf8_lossy(workerjob.payload())
+            )
+            .into_bytes())
+        })
+        .await
+        .expect("CAN_DO should work")
+        .do_one_job()
+        .await
+        .expect("Doing the job should work");
+    let mut job = job;
+    let response = job
+        .response()
+        .await
+        .expect("expecting response from worker");
+    assert!(matches!(
+        response,
+        WorkUpdate::Complete {
+            handle: _,
+            payload: _
+        }
+    ));
+    if let WorkUpdate::Complete {
+        handle: response_handle,
+        payload: response_payload,
+    } = response
+    {
+        assert!(response_handle == job.handle().handle());
+        assert!(String::from_utf8_lossy(&response_payload) == "worker saw aaaaa");
+    } else {
+        panic!("matches macro does not work as expected");
+    }
     let ujob = client
         .submit_unique("testunique", b"12345", b"bbbbb")
         .await

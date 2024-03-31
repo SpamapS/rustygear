@@ -592,6 +592,52 @@ impl Client {
         Ok(self)
     }
 
+    /// Receive and do just one job. Will not return until a job is done or there
+    /// is an error. See [Client.work] for more information.
+    pub async fn do_one_job(&mut self) -> Result<(), io::Error> {
+        let job = self.client_data.receivers().worker_job_rx.try_recv();
+        let job = match job {
+            Err(TryRecvError::Empty) => {
+                for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
+                    let packet = new_req(GRAB_JOB, Bytes::new());
+                    conn.send_packet(packet).await?;
+                }
+                match self.client_data.receivers().worker_job_rx.recv().await {
+                    Some(job) => job,
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "Worker job tx are all dropped",
+                        ))
+                    }
+                }
+            }
+            Err(TryRecvError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Worker job tx are all dropped",
+                ))
+            }
+            Ok(job) => job,
+        };
+        let tx = match self.client_data.get_jobs_tx_by_func(&Vec::from(job.function())) {
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!(
+                        "Received job for unregistered function: {:?}",
+                        job.function()
+                    ),
+                ))
+            }
+            Some(tx) => tx,
+        };
+        if let Err(_) = tx.send(job).await {
+            warn!("Ignored a job for an unregistered function"); // XXX We can do much, much better
+        }
+        return Ok(())
+    }
+
     /// Run the assigned jobs through can_do functions until an error happens
     ///
     /// After you have set up all functions your worker can do via the
@@ -599,48 +645,9 @@ impl Client {
     /// not return unless there is an unexpected error.
     ///
     /// See examples/worker.rs for more information on how to use it.
-    pub async fn work(self) -> Result<(), io::Error> {
+    pub async fn work(mut self) -> Result<(), io::Error> {
         loop {
-            let job = self.client_data.receivers().worker_job_rx.try_recv();
-            let job = match job {
-                Err(TryRecvError::Empty) => {
-                    for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
-                        let packet = new_req(GRAB_JOB, Bytes::new());
-                        conn.send_packet(packet).await?;
-                    }
-                    match self.client_data.receivers().worker_job_rx.recv().await {
-                        Some(job) => job,
-                        None => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "Worker job tx are all dropped",
-                            ))
-                        }
-                    }
-                }
-                Err(TryRecvError::Disconnected) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "Worker job tx are all dropped",
-                    ))
-                }
-                Ok(job) => job,
-            };
-            let tx = match self.client_data.get_jobs_tx_by_func(&Vec::from(job.function())) {
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!(
-                            "Received job for unregistered function: {:?}",
-                            job.function()
-                        ),
-                    ))
-                }
-                Some(tx) => tx,
-            };
-            if let Err(_) = tx.send(job).await {
-                warn!("Ignored a job for an unregistered function"); // XXX We can do much, much better
-            }
+            self.do_one_job().await?;
         }
     }
 
