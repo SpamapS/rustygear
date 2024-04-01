@@ -33,8 +33,8 @@ async fn test_client_submit() {
         .expect("Submit job should return a client job");
     assert!(job.handle().handle().len() > 0);
 
-    let worker = connect(server.addr()).await;
-    worker
+    let mut worker = connect(server.addr())
+        .await
         .can_do("testfunc", |workerjob| {
             Ok(format!(
                 "worker saw {}",
@@ -43,7 +43,8 @@ async fn test_client_submit() {
             .into_bytes())
         })
         .await
-        .expect("CAN_DO should work")
+        .expect("CAN_DO should work");
+    worker
         .do_one_job()
         .await
         .expect("Doing the job should work");
@@ -52,13 +53,6 @@ async fn test_client_submit() {
         .response()
         .await
         .expect("expecting response from worker");
-    assert!(matches!(
-        response,
-        WorkUpdate::Complete {
-            handle: _,
-            payload: _
-        }
-    ));
     if let WorkUpdate::Complete {
         handle: response_handle,
         payload: response_payload,
@@ -69,9 +63,16 @@ async fn test_client_submit() {
     } else {
         panic!("Got unexpected WorkUpdate for job: {:?}", response);
     }
+}
+
+#[tokio::test]
+async fn test_client_submit_unique() {
+    let server = start_test_server().unwrap();
+    let mut client = connect(server.addr()).await;
     let ujob = client
-        .submit_unique("testunique", b"12345", b"bbbbb")
+        .submit_unique("testunique", b"id:12345", b"bbbbb")
         .await
         .expect("Submit unique should return a client job");
     assert!(ujob.handle().handle().len() > 0);
+    // TODO: GRAB_JOB_UNIQ is not implemented yet
 }
