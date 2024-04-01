@@ -5,7 +5,11 @@ use rustygeard::testutil::start_test_server;
 
 async fn connect(addr: &SocketAddr) -> Client {
     let client = Client::new().add_server(&addr.to_string());
-    client.connect().await.expect("Failed to connect to serve")
+    client
+        .set_client_id("tests")
+        .connect()
+        .await
+        .expect("Failed to connect to server")
 }
 
 #[tokio::test]
