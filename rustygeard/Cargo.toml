@@ -6,7 +6,7 @@ authors = ["Clint Byrum <clint@fewbar.com>"]
 license = "Apache-2.0"
 edition = "2018"
 keywords = ["gearman", "server"]
-homepage = "https://github.com/SpamapS/rustygear"
+repository = "https://github.com/SpamapS/rustygear"
 
 [dependencies]
 bytes = ">=1.1.0"
