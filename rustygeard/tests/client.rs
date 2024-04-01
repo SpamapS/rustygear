@@ -41,8 +41,9 @@ async fn test_client_submit() {
         .await
         .can_do("testfunc", |workerjob| {
             Ok(format!(
-                "worker saw {}",
-                String::from_utf8_lossy(workerjob.payload())
+                "worker saw {} with unique [{}]",
+                String::from_utf8_lossy(workerjob.payload()),
+                String::from_utf8_lossy(workerjob.unique())
             )
             .into_bytes())
         })
@@ -63,7 +64,13 @@ async fn test_client_submit() {
     } = response
     {
         assert!(response_handle == job.handle().handle());
-        assert!(String::from_utf8_lossy(&response_payload) == "worker saw aaaaa");
+        let response_payload = String::from_utf8_lossy(&response_payload);
+        if let Some((left, right)) = response_payload.split_once('[') {
+            assert_eq!(left, "worker saw aaaaa with unique ");
+            assert!(right.ends_with(']'));
+        } else {
+            panic!("Payload is wrong: {}", response_payload);
+        }
     } else {
         panic!("Got unexpected WorkUpdate for job: {:?}", response);
     }

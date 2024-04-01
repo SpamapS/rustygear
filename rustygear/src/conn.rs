@@ -79,6 +79,7 @@ impl ConnHandler {
             JOB_CREATED => self.handle_job_created(&req),
             NO_JOB => self.handle_no_job(),
             JOB_ASSIGN => self.handle_job_assign(&req),
+            JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
             ECHO_RES => self.handle_echo_res(&req),
             ERROR => self.handle_error(&req),
             STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
@@ -86,7 +87,6 @@ impl ConnHandler {
             WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
                 self.handle_work_update(&req)
             }
-            //JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
             //JOB_ASSIGN_ALL => self.handle_job_assign_all(&req),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
@@ -224,10 +224,30 @@ impl ConnHandler {
         let handle = next_field(&mut data);
         let function = next_field(&mut data);
         let payload = next_field(&mut data);
+        let unique = Bytes::new();
         let job = WorkerJob {
             handle,
             function,
             payload,
+            unique,
+            sink_tx: self.sink_tx.clone(),
+        };
+        let tx = self.client_data.worker_job_tx();
+        runtime::Handle::current().spawn(async move { tx.send(job).await });
+        Ok(no_response())
+    }
+
+    fn handle_job_assign_uniq(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+        let mut data = req.data.clone();
+        let handle = next_field(&mut data);
+        let function = next_field(&mut data);
+        let unique = next_field(&mut data);
+        let payload = next_field(&mut data);
+        let job = WorkerJob {
+            handle,
+            function,
+            payload,
+            unique,
             sink_tx: self.sink_tx.clone(),
         };
         let tx = self.client_data.worker_job_tx();

@@ -112,6 +112,7 @@ pub struct WorkerJob {
     pub handle: Bytes,
     pub function: Bytes,
     pub payload: Bytes,
+    pub unique: Bytes,
     pub(crate) sink_tx: Sender<Packet>,
 }
 
@@ -177,6 +178,9 @@ impl WorkerJob {
     }
     pub fn payload(&self) -> &[u8] {
         self.payload.as_ref()
+    }
+    pub fn unique(&self) -> &[u8] {
+        self.unique.as_ref()
     }
 
     /// Sends a WORK_STATUS
@@ -599,7 +603,7 @@ impl Client {
         let job = match job {
             Err(TryRecvError::Empty) => {
                 for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
-                    let packet = new_req(GRAB_JOB, Bytes::new());
+                    let packet = new_req(GRAB_JOB_UNIQ, Bytes::new());
                     conn.send_packet(packet).await?;
                 }
                 match self.client_data.receivers().worker_job_rx.recv().await {
