@@ -1,7 +1,8 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate};
 use rustygeard::testutil::start_test_server;
+use tokio::time::sleep;
 
 async fn connect(addr: &SocketAddr) -> Client {
     let client = Client::new().add_server(&addr.to_string());
@@ -101,5 +102,47 @@ async fn test_client_submit_unique() {
         assert_eq!(&response_payload, "worker saw bbbbb with unique [id:12345]");
     } else {
         panic!("Worker did not send WORK_COMPLETE")
+    }
+}
+
+#[tokio::test]
+async fn test_client_submit_background() {
+    let server = start_test_server().unwrap();
+    let mut client = connect(server.addr()).await;
+    let mut bgjob = client
+        .submit_background("testfunc", b"asyncstuff")
+        .await
+        .expect("Background submit should work");
+    let status = client
+        .get_status(bgjob.handle())
+        .await
+        .expect("GET_STATUS should work");
+    assert_eq!(status.handle, bgjob.handle().handle());
+    assert!(status.known);
+    assert!(!status.running);
+    let mut worker = worker(server.addr()).await;
+    worker
+        .do_one_job()
+        .await
+        .expect("Doing the job should work");
+    if let Ok(_) = bgjob.response().await {
+        panic!("Background jobs should never have a response")
+    }
+    // The job should be gone but we might be ahead of WORK_COMPLETE so try a few times
+    let mut retries = 5;
+    loop {
+        let status = client
+            .get_status(bgjob.handle())
+            .await
+            .expect("GET_STATUS should work");
+        if !status.known {
+            break;
+        }
+        // Polling is the pits but it's all we have
+        sleep(Duration::from_millis(100)).await;
+        retries -= 1;
+        if retries <= 0 {
+            panic!("Job did not disappear after 15 retries");
+        }
     }
 }

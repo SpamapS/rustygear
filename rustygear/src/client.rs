@@ -502,7 +502,10 @@ impl Client {
         let client_data = self.client_data.clone();
         let submit_result = if let Some(handle) = client_data.receivers().job_created_rx.recv().await {
             let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
-            self.client_data.set_sender_by_handle(handle.clone(), tx.clone());
+            match ptype {
+                SUBMIT_JOB_BG | SUBMIT_JOB_HIGH_BG | SUBMIT_JOB_LOW_BG => {/* Do not save tx */ },
+                _ => self.client_data.set_sender_by_handle(handle.clone(), tx.clone())
+            };
             Ok(ClientJob::new(handle, rx))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "No job created!"))
