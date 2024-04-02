@@ -255,12 +255,14 @@ impl Client {
     }
 
     /// Configures the client ID for this client
+    ///
+    /// This has no effect if called after connect()
     pub fn set_client_id(mut self, client_id: &'static str) -> Self {
         self.client_id = Some(Bytes::from(client_id));
         self
     }
 
-    /// Attempts to connect to all servers added via [Client.add_server]
+    /// Blocks until all servers added via [Client.add_server] are connected
     pub async fn connect(self) -> Result<Self, Box<dyn std::error::Error>> {
         /* Returns the client after having attempted to connect to all servers. */
         trace!("connecting");
