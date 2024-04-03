@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use crate::clientdata::ClientData;
 use crate::codec::{Packet, PacketCodec};
-use crate::conn::{Connections, ConnHandler, ServerHandle};
+use crate::conn::{ConnHandler, Connections, ServerHandle};
 use crate::constants::*;
 use crate::util::{new_req, new_res};
 
@@ -58,7 +58,13 @@ pub struct JobStatus {
 
 impl Display for JobStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "JobStatus {{ handle: {}, known: {}, running: {}", String::from_utf8_lossy(&self.handle), self.known, self.running)?;
+        write!(
+            f,
+            "JobStatus {{ handle: {}, known: {}, running: {}",
+            String::from_utf8_lossy(&self.handle),
+            self.known,
+            self.running
+        )?;
         if self.denominator > 0 {
             write!(f, " {}/{}", self.numerator, self.denominator)?;
         }
@@ -95,11 +101,7 @@ impl fmt::Display for ClientJob {
         // stream: `f`. Returns `fmt::Result` which indicates whether the
         // operation succeeded or failed. Note that `write!` uses syntax which
         // is very similar to `println!`.
-        write!(
-            f,
-            "ClientJob[{}]",
-            self.handle,
-        )
+        write!(f, "ClientJob[{}]", self.handle,)
     }
 }
 
@@ -266,7 +268,9 @@ impl Client {
     pub fn active_servers(&self) -> Vec<&String> {
         // Active servers will have a writer and a reader
         let servers = self.active_servers.lock().unwrap();
-        servers.iter().enumerate()
+        servers
+            .iter()
+            .enumerate()
             .filter(|(_offset, active)| **active)
             .filter_map(|(offset, _server)| self.servers.get(offset))
             .collect()
@@ -295,37 +299,48 @@ impl Client {
                     None => {
                         debug!("Shutting down connector thread.");
                         return;
-                    },
+                    }
                     Some(offset) => {
                         match connector_servers.get(offset) {
-                            None => warn!("Invalid connection offset {} sent to connector thread, ignoring.", offset),
+                            None => warn!(
+                                "Invalid connection offset {} sent to connector thread, ignoring.",
+                                offset
+                            ),
                             Some(server) => {
                                 let server: &str = server;
                                 let addr = server.to_socket_addrs().unwrap().next().unwrap();
                                 trace!("really connecting: i={} addr={:?}", offset, addr);
                                 match TcpStream::connect(addr).await {
                                     Err(e) => {
-                                        error!("Couldn't connect to {} [{}], will retry after {:?}", server, e, RECONNECT_BACKOFF);
+                                        error!(
+                                            "Couldn't connect to {} [{}], will retry after {:?}",
+                                            server, e, RECONNECT_BACKOFF
+                                        );
                                         let ctx_conn = ctx_conn.clone();
                                         // Retry in BACKOFF seconds -- TODO: keep track and do exponential
-                                        runtime::Handle::current().spawn(
-                                            async move {
-                                                sleep(RECONNECT_BACKOFF).await;
-                                                ctx_conn.send(offset).await});
-                                    },
+                                        runtime::Handle::current().spawn(async move {
+                                            sleep(RECONNECT_BACKOFF).await;
+                                            ctx_conn.send(offset).await
+                                        });
+                                    }
                                     Ok(stream) => {
                                         info!("Connected to {}", server);
                                         connector_active_servers.lock().unwrap()[offset] = true;
                                         let pc = PacketCodec {};
                                         if !connector_active_servers.lock().unwrap()[offset] {
-                                            warn!("Received offset of disconnected server, ignoring");
+                                            warn!(
+                                                "Received offset of disconnected server, ignoring"
+                                            );
                                             continue;
                                         }
                                         let (mut sink, mut stream) = pc.framed(stream).split();
                                         if let Some(ref client_id) = client_id {
                                             let req = new_req(SET_CLIENT_ID, client_id.clone());
                                             if let Err(e) = sink.send(req).await {
-                                                debug!("Connection {:?} can't send packets. ({:?})", sink, e);
+                                                debug!(
+                                                    "Connection {:?} can't send packets. ({:?})",
+                                                    sink, e
+                                                );
                                                 continue;
                                             }
                                         }
@@ -339,9 +354,13 @@ impl Client {
                                             handler_client_data.clone(),
                                         );
                                         trace!("Inserting at {}", offset);
-                                        connector_conns.lock().unwrap().insert(offset, handler.clone());
+                                        connector_conns
+                                            .lock()
+                                            .unwrap()
+                                            .insert(offset, handler.clone());
                                         trace!("Inserted at {}", offset);
-                                        let reader_active_servers = connector_active_servers.clone();
+                                        let reader_active_servers =
+                                            connector_active_servers.clone();
                                         let reader_ctx = ctx2.clone();
                                         let reader = async move {
                                             let tx = tx.clone();
@@ -370,13 +389,15 @@ impl Client {
                                                 error!("Can't send to connector, aborting! {}", e);
                                             }
                                         };
-                                        let writer_active_servers = connector_active_servers.clone();
+                                        let writer_active_servers =
+                                            connector_active_servers.clone();
                                         let writer = async move {
                                             while let Some(packet) = rx.recv().await {
                                                 trace!("Sending {:?}", &packet);
                                                 if let Err(_) = sink.send(packet).await {
                                                     error!("Connection ({}) dropped", offset);
-                                                    writer_active_servers.lock().unwrap()[offset] = false;
+                                                    writer_active_servers.lock().unwrap()[offset] =
+                                                        false;
                                                 }
                                             }
                                         };
@@ -387,7 +408,7 @@ impl Client {
                                             info!("Shutting down connector because connected channel returned error ({})", e);
                                             break;
                                         }
-                                    },
+                                    }
                                 }
                             }
                         }
@@ -405,9 +426,12 @@ impl Client {
             info!("Waiting for {}", waiting_for);
             match ctdrx.recv().await {
                 None => {
-                    return Err(Box::new(io::Error::new(io::ErrorKind::Other, "Connector aborted")))
-                },
-                Some(_) => { waiting_for -= 1 }
+                    return Err(Box::new(io::Error::new(
+                        io::ErrorKind::Other,
+                        "Connector aborted",
+                    )))
+                }
+                Some(_) => waiting_for -= 1,
             }
             if waiting_for <= 0 {
                 break;
@@ -428,7 +452,13 @@ impl Client {
                 "No connections for echo!",
             ));
         }
-        self.conns.lock().unwrap().get(0).unwrap().send_packet(packet).await?;
+        self.conns
+            .lock()
+            .unwrap()
+            .get(0)
+            .unwrap()
+            .send_packet(packet)
+            .await?;
         debug!("Waiting for echo response");
         match self.client_data.receivers().echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
@@ -501,24 +531,28 @@ impl Client {
         let packet = new_req(ptype, data.freeze());
         {
             let mut conns = self.conns.lock().unwrap();
-            let conn  = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
+            let conn = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
                 None => {
                     return Err(io::Error::new(
                         io::ErrorKind::Other,
                         "No connections for submitting jobs.",
                     ));
-                },
-                Some(conn) => conn
+                }
+                Some(conn) => conn,
             };
             conn.send_packet(packet).await?;
             /* Really important that conn be unlocked here to unblock res processing */
         }
         let client_data = self.client_data.clone();
-        let submit_result = if let Some(handle) = client_data.receivers().job_created_rx.recv().await {
+        let submit_result = if let Some(handle) =
+            client_data.receivers().job_created_rx.recv().await
+        {
             let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
             match ptype {
-                SUBMIT_JOB_BG | SUBMIT_JOB_HIGH_BG | SUBMIT_JOB_LOW_BG => {/* Do not save tx */ },
-                _ => self.client_data.set_sender_by_handle(handle.clone(), tx.clone())
+                SUBMIT_JOB_BG | SUBMIT_JOB_HIGH_BG | SUBMIT_JOB_LOW_BG => { /* Do not save tx */ }
+                _ => self
+                    .client_data
+                    .set_sender_by_handle(handle.clone(), tx.clone()),
             };
             Ok(ClientJob::new(handle, rx))
         } else {
@@ -532,24 +566,25 @@ impl Client {
         // TODO: mapping?
         {
             let conns = self.conns.lock().unwrap();
-            let conn = match conns.iter().enumerate().find(
-                |(offset, c)| {
+            let conn = match conns
+                .iter()
+                .enumerate()
+                .find(|(offset, c)| {
                     if self.active_servers.lock().unwrap()[*offset] {
                         if let Some(c) = c {
                             c.server() == handle.server()
-                        } else { 
-                            false    
+                        } else {
+                            false
                         }
                     } else {
                         false
                     }
                 })
-                .map(|(_offset, conn)| conn) {
-                    None => {
-                        return Err(io::Error::new(ErrorKind::Other, "No connection for job"))
-                    },
-                    Some(conn) => conn.as_ref().unwrap(),
-            };  
+                .map(|(_offset, conn)| conn)
+            {
+                None => return Err(io::Error::new(ErrorKind::Other, "No connection for job")),
+                Some(conn) => conn.as_ref().unwrap(),
+            };
             let mut payload = BytesMut::with_capacity(handle.handle().len());
             payload.extend(handle.handle());
             let status_req = new_req(GET_STATUS, payload.freeze());
@@ -579,7 +614,14 @@ impl Client {
     {
         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
-            for (i, conn) in self.conns.lock().unwrap().iter_mut().filter_map(|c| c.to_owned()).enumerate() {
+            for (i, conn) in self
+                .conns
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .filter_map(|c| c.to_owned())
+                .enumerate()
+            {
                 {
                     let mut k = Vec::with_capacity(function.len());
                     k.extend_from_slice(function.as_bytes());
@@ -628,7 +670,13 @@ impl Client {
         let job = self.client_data.receivers().worker_job_rx.try_recv();
         let job = match job {
             Err(TryRecvError::Empty) => {
-                for conn in self.conns.lock().unwrap().iter().filter_map(|c| c.to_owned()) {
+                for conn in self
+                    .conns
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|c| c.to_owned())
+                {
                     let packet = new_req(GRAB_JOB_UNIQ, Bytes::new());
                     conn.send_packet(packet).await?;
                 }
@@ -650,7 +698,10 @@ impl Client {
             }
             Ok(job) => job,
         };
-        let tx = match self.client_data.get_jobs_tx_by_func(&Vec::from(job.function())) {
+        let tx = match self
+            .client_data
+            .get_jobs_tx_by_func(&Vec::from(job.function()))
+        {
             None => {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
@@ -665,7 +716,7 @@ impl Client {
         if let Err(_) = tx.send(job).await {
             warn!("Ignored a job for an unregistered function"); // XXX We can do much, much better
         }
-        return Ok(())
+        return Ok(());
     }
 
     /// Run the assigned jobs through can_do functions until an error happens
