@@ -1,8 +1,8 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{io::ErrorKind, net::SocketAddr, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate};
 use rustygeard::testutil::start_test_server;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 async fn connect(addr: &SocketAddr) -> Client {
     let client = Client::new().add_server(&addr.to_string());
@@ -145,4 +145,58 @@ async fn test_client_submit_background() {
             panic!("Job did not disappear after 15 retries");
         }
     }
+}
+
+#[tokio::test]
+async fn test_client_multi_server() {
+    let server1 = start_test_server().unwrap();
+    let server2 = start_test_server().unwrap();
+    let server1_str = server1.addr().to_string();
+    let server2_str = server2.addr().to_string();
+    let mut client = Client::new()
+        .add_server(&server1_str)
+        .add_server(&server2_str)
+        .set_client_id("test_client_multi_server")
+        .connect()
+        .await
+        .expect("Client should connect to both");
+    let cjob = client
+        .submit_unique("multifunc", b"cjob", b"cjobdata")
+        .await
+        .expect("submit should work on multiple servers");
+    let status = client
+        .get_status(cjob.handle())
+        .await
+        .expect("Should be able to get status on job submitted");
+    assert!(status.known);
+    let cjob_server_str = cjob.handle().server();
+    let job_server = if cjob_server_str == &server1_str {
+        server1
+    } else if cjob.handle().server() == &server2_str {
+        server2
+    } else {
+        panic!("Server handle for non-server?");
+    };
+    // Now shut down the one that it was connected to
+    drop(job_server);
+    let mut retries = 5;
+    let status_error = loop {
+        if client.active_servers().contains(&cjob_server_str) {
+            retries -= 1;
+            if retries <= 0 {
+                panic!("Failed to detect disconnected server");
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+        // It's expected to timeout, but we want to try again until the server disappears and we get
+        // the error.
+        match timeout(Duration::from_millis(100), client.get_status(cjob.handle())).await {
+            Err(_) => continue,
+            Ok(status_result) => match status_result {
+                Ok(_status) => continue,
+                Err(e) => break e,
+            },
+        };
+    };
+    assert_eq!(status_error.kind(), ErrorKind::Other);
 }
