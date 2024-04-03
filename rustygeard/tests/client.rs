@@ -200,3 +200,56 @@ async fn test_client_multi_server() {
     };
     assert_eq!(status_error.kind(), ErrorKind::Other);
 }
+
+#[tokio::test]
+async fn test_worker_multi_server() {
+    let server1 = start_test_server().unwrap();
+    let server2 = start_test_server().unwrap();
+    let server1_str = server1.addr().to_string();
+    let server2_str = server2.addr().to_string();
+    let mut worker = Client::new()
+        .add_server(&server1_str)
+        .add_server(&server2_str)
+        .set_client_id("test_worker_multi_server")
+        .connect()
+        .await
+        .expect("Client should connect to both")
+        .can_do("multifunc", |wj| {
+            Ok(format!("worker saw handle={}", String::from_utf8_lossy(wj.handle())).into_bytes())
+        })
+        .await
+        .expect("CAN_DO should succeed");
+    let mut client = connect(server1.addr()).await;
+    let mut cj = client
+        .submit_unique("multifunc", b"id:multi1", b"multipayload")
+        .await
+        .expect("Submit job should be fine");
+    worker
+        .do_one_job()
+        .await
+        .expect("Should not error while doing one job");
+    assert!(matches!(
+        cj.response().await.expect("Should receive a complete!"),
+        WorkUpdate::Complete {
+            handle: _handle,
+            payload: _payload
+        }
+    ));
+    // And now on server 2
+    let mut cj2 = connect(server2.addr())
+        .await
+        .submit_unique("multifunc", b"id2:999", b"payload2")
+        .await
+        .expect("Submitting to server 2 should work");
+    worker
+        .do_one_job()
+        .await
+        .expect("Second job should be done");
+    assert!(matches!(
+        cj2.response().await.expect("Should receive a complete!"),
+        WorkUpdate::Complete {
+            handle: _handle,
+            payload: _payload
+        }
+    ));
+}
