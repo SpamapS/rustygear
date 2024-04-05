@@ -1,10 +1,10 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::io;
+use std::net::SocketAddr;
 use std::ops::Drop;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::net::SocketAddr;
 
 use core::task::{Context, Poll};
 
@@ -67,22 +67,20 @@ impl GearmanService {
                     psize: resp_str.len() as u32,
                     data: resp_body.freeze(),
                 })
-            },
+            }
             ADMIN_STATUS => Ok(admin::admin_command_status(
                 self.queues.clone(),
                 self.workers.clone(),
             )),
             ADMIN_WORKERS => Ok(admin::admin_command_workers(
-                self.workers_by_conn_id.clone())
-            ),
+                self.workers_by_conn_id.clone(),
+            )),
             ADMIN_PRIORITYSTATUS => Ok(admin::admin_command_priority_status(
                 self.queues.clone(),
-                self.workers.clone())
-            ),
-            ADMIN_UNKNOWN => Ok(admin::admin_command_unknown()
-            ),
-            ADMIN_SHUTDOWN => Ok(admin::admin_command_shutdown(self, &self.peer_addr)
-            ),
+                self.workers.clone(),
+            )),
+            ADMIN_UNKNOWN => Ok(admin::admin_command_unknown()),
+            ADMIN_SHUTDOWN => Ok(admin::admin_command_shutdown(self, &self.peer_addr)),
             _ => panic!(
                 "response_from_packet called with invalid ptype: {}",
                 packet.ptype
@@ -94,7 +92,10 @@ impl GearmanService {
         let senders_by_conn_id = self.senders_by_conn_id.lock().unwrap();
         match senders_by_conn_id.get(&conn_id) {
             None => {
-                error!("No connection found for conn_id = {} while trying to send {:?}", &conn_id, packet); // XXX You can do better
+                error!(
+                    "No connection found for conn_id = {} while trying to send {:?}",
+                    &conn_id, packet
+                ); // XXX You can do better
             }
             Some(tx) => {
                 let tx = tx.clone();
@@ -406,9 +407,15 @@ impl Service<Packet> for GearmanService {
     }
 
     fn call(&mut self, req: Packet) -> Self::Future {
-        debug!("[{}:{:?}] Got a req {:?}", self.conn_id, self.worker.lock().unwrap().client_id, req);
+        debug!(
+            "[{}:{:?}] Got a req {:?}",
+            self.conn_id,
+            self.worker.lock().unwrap().client_id,
+            req
+        );
         let res = match req.ptype {
-            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN | ADMIN_SHUTDOWN => self.response_from_packet(&req),
+            ADMIN_VERSION | ADMIN_STATUS | ADMIN_WORKERS | ADMIN_PRIORITYSTATUS | ADMIN_UNKNOWN
+            | ADMIN_SHUTDOWN => self.response_from_packet(&req),
             SUBMIT_JOB => self.handle_submit_job(PRIORITY_NORMAL, true, req),
             SUBMIT_JOB_HIGH => self.handle_submit_job(PRIORITY_HIGH, true, req),
             SUBMIT_JOB_LOW => self.handle_submit_job(PRIORITY_LOW, true, req),
@@ -423,7 +430,9 @@ impl Service<Packet> for GearmanService {
             GRAB_JOB_UNIQ => self.handle_grab_job_uniq(),
             GRAB_JOB_ALL => self.handle_grab_job_all(),
             WORK_COMPLETE => self.handle_work_complete(&req),
-            WORK_STATUS | WORK_DATA | WORK_WARNING => self.handle_work_update(&req),
+            WORK_FAIL | WORK_EXCEPTION | WORK_STATUS | WORK_DATA | WORK_WARNING => {
+                self.handle_work_update(&req)
+            }
             SET_CLIENT_ID => self.handle_set_client_id(&req),
             ECHO_REQ => Ok(new_res(ECHO_RES, req.data)),
             _ => {

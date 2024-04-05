@@ -5,9 +5,13 @@ use rustygeard::testutil::start_test_server;
 use tokio::time::{sleep, timeout};
 
 async fn connect(addr: &SocketAddr) -> Client {
+    connect_with_client_id(addr, "tests").await
+}
+
+async fn connect_with_client_id(addr: &SocketAddr, client_id: &'static str) -> Client {
     let client = Client::new().add_server(&addr.to_string());
     client
-        .set_client_id("tests")
+        .set_client_id(client_id)
         .connect()
         .await
         .expect("Failed to connect to server")
@@ -252,4 +256,31 @@ async fn test_worker_multi_server() {
             payload: _payload
         }
     ));
+}
+
+#[tokio::test]
+async fn test_work_fail() {
+    let server = start_test_server().unwrap();
+    let worker = connect_with_client_id(server.addr(), "failing-worker").await;
+    let mut worker = worker
+        .can_do("alwaysfail", |_work| {
+            Err(std::io::Error::new(ErrorKind::Other, "Epic Fail!"))
+        })
+        .await
+        .expect("CAN_DO should succeed");
+    let mut client: Client = connect(server.addr()).await;
+    let mut job = client
+        .submit("alwaysfail", b"preciouspayload")
+        .await
+        .expect("Submit should succeed");
+    worker
+        .do_one_job()
+        .await
+        .expect("One job should be completed");
+    let response = job.response().await.expect("Should receive a WorkUpdate");
+    if let WorkUpdate::Fail(handle) = response {
+        assert_eq!(handle, job.handle().handle())
+    } else {
+        panic!("Job did not fail! {:?}", response);
+    }
 }
