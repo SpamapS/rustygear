@@ -1,10 +1,21 @@
-use std::{fmt::{Debug, Display}, slice::{Iter, IterMut}, io};
+use std::{
+    collections::HashMap,
+    fmt::{Debug, Display},
+    io,
+    slice::{Iter, IterMut},
+};
 
 use bytes::Bytes;
 use hashring::HashRing;
-use tokio::{sync::mpsc::Sender, runtime};
+use tokio::{runtime, sync::mpsc::Sender};
 
-use crate::{codec::Packet, clientdata::ClientData, constants::*, util::{new_req, no_response, next_field, bytes2bool}, client::{JobStatus, WorkUpdate, WorkerJob, Hostname}};
+use crate::{
+    client::{Hostname, JobStatus, WorkUpdate, WorkerJob},
+    clientdata::ClientData,
+    codec::Packet,
+    constants::*,
+    util::{bytes2bool, new_req, next_field, no_response},
+};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct ServerHandle {
@@ -14,10 +25,7 @@ pub struct ServerHandle {
 
 impl ServerHandle {
     pub fn new(server: Hostname, handle: Bytes) -> ServerHandle {
-        ServerHandle {
-            server,
-            handle,
-        }
+        ServerHandle { server, handle }
     }
 
     pub fn server(&self) -> &Hostname {
@@ -42,27 +50,38 @@ pub struct ConnHandler {
     server: Hostname,
     sink_tx: Sender<Packet>,
     client_data: ClientData,
+    active: bool,
 }
 
 impl ConnHandler {
-    pub fn new (
+    pub fn new(
         client_id: &Option<Bytes>,
         server: Hostname,
         sink_tx: Sender<Packet>,
         client_data: ClientData,
+        active: bool,
     ) -> ConnHandler {
         ConnHandler {
             client_id: client_id.clone(),
             server,
             sink_tx,
             client_data,
+            active,
         }
     }
 
     pub fn server(&self) -> &Hostname {
         &self.server
     }
-    
+
+    pub fn is_active(&self) -> bool {
+        return self.active;
+    }
+
+    pub fn set_active(&mut self, active: bool) {
+        self.active = active
+    }
+
     pub async fn send_packet(&self, packet: Packet) -> Result<(), io::Error> {
         if let Err(e) = self.sink_tx.send(packet).await {
             error!("Receiver dropped");
@@ -70,7 +89,6 @@ impl ConnHandler {
         }
         Ok(())
     }
-
 
     pub fn call(&mut self, req: Packet) -> Result<Packet, io::Error> {
         debug!("[{:?}] Got a req {:?}", self.client_id, req);
@@ -119,7 +137,8 @@ impl ConnHandler {
         let tx = self.client_data.job_created_tx();
         let handle = req.data.clone();
         let server = self.server.clone();
-        runtime::Handle::current().spawn(async move { tx.send(ServerHandle::new(server, handle)).await });
+        runtime::Handle::current()
+            .spawn(async move { tx.send(ServerHandle::new(server, handle)).await });
         Ok(no_response())
     }
 
@@ -259,19 +278,27 @@ impl ConnHandler {
 impl Debug for ConnHandler {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // client_data is too big to display
-        f.debug_struct("ConnHandler").field("client_id", &self.client_id).field("server", &self.server).field("sink_tx", &self.sink_tx).finish()
+        f.debug_struct("ConnHandler")
+            .field("client_id", &self.client_id)
+            .field("server", &self.server)
+            .field("sink_tx", &self.sink_tx)
+            .finish()
     }
 }
 
 pub struct Connections {
     conns: Vec<Option<ConnHandler>>,
+    server_map: HashMap<Hostname, usize>,
     ring: HashRing<usize>,
 }
 
 impl Debug for Connections {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let ring = format!("HashRing(len={})", self.ring.len());
-        f.debug_struct("Connections").field("conns", &self.conns).field("ring", &ring).finish()
+        f.debug_struct("Connections")
+            .field("conns", &self.conns)
+            .field("ring", &ring)
+            .finish()
     }
 }
 
@@ -280,6 +307,7 @@ impl Connections {
     pub fn new() -> Connections {
         Connections {
             conns: Vec::new(),
+            server_map: HashMap::new(),
             ring: HashRing::new(),
         }
     }
@@ -288,8 +316,43 @@ impl Connections {
         if offset > self.conns.len() {
             (0..offset).for_each(|_| self.conns.push(None))
         }
+        self.server_map.insert(handler.server.clone(), offset);
         self.conns.insert(offset, Some(handler));
         self.ring.add(offset);
+    }
+
+    pub fn active_servers(&self) -> impl Iterator<Item = &Hostname> {
+        self.conns.iter().filter_map(|conn| {
+            conn.as_ref().and_then(|conn| {
+                if conn.is_active() {
+                    Some(conn.server())
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    pub fn deactivate_server(&mut self, server: &Hostname) {
+        self.set_active_by_server(server, false)
+    }
+
+    pub fn activate_server(&mut self, server: &Hostname) {
+        self.set_active_by_server(server, true)
+    }
+
+    pub fn set_active_by_server(&mut self, server: &Hostname, active: bool) {
+        if let Some(offset) = self.server_map.get(server) {
+            if let Some(conn) = self.conns.get_mut(*offset) {
+                if let Some(conn) = conn {
+                    return conn.set_active(active);
+                }
+            }
+        }
+        warn!(
+            "Tried to set active = {} on a connection that wasn't there: {}",
+            active, server
+        );
     }
 
     pub fn len(&self) -> usize {
@@ -304,6 +367,24 @@ impl Connections {
                 Some(ref c) => Some(c),
             },
         }
+    }
+
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut ConnHandler> {
+        match self.conns.get_mut(index) {
+            None => None,
+            Some(c) => match c {
+                None => None,
+                Some(ref mut c) => Some(c),
+            },
+        }
+    }
+
+    pub fn get_by_server(&self, server: &Hostname) -> Option<&ConnHandler> {
+        self.server_map
+            .get(server)
+            .and_then(|offset| self.conns.get(*offset))
+            .unwrap_or(&None)
+            .as_ref()
     }
 
     pub fn get_hashed_conn(&mut self, hashable: &Vec<u8>) -> Option<&mut ConnHandler> {

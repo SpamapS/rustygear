@@ -82,7 +82,6 @@ impl Display for JobStatus {
 /// See examples/client.rs and examples/worker.rs for information on how to use it.
 pub struct Client {
     servers: Vec<Hostname>,
-    active_servers: Arc<Mutex<Vec<bool>>>,
     conns: Arc<Mutex<Connections>>,
     client_id: Option<Bytes>,
     client_data: ClientData,
@@ -241,7 +240,6 @@ impl Client {
     pub fn new() -> Client {
         Client {
             servers: Vec::new(),
-            active_servers: Arc::new(Mutex::new(Vec::new())),
             conns: Arc::new(Mutex::new(Connections::new())),
             client_id: None,
             client_data: ClientData::new(),
@@ -252,7 +250,6 @@ impl Client {
     ///
     pub fn add_server(mut self, server: &str) -> Self {
         self.servers.push(Hostname::from(server));
-        self.active_servers.lock().unwrap().push(false);
         self
     }
 
@@ -265,14 +262,13 @@ impl Client {
     }
 
     /// Returns a Vec of references to strings corresponding to only active servers
-    pub fn active_servers(&self) -> Vec<&String> {
+    pub fn active_servers(&self) -> Vec<Hostname> {
         // Active servers will have a writer and a reader
-        let servers = self.active_servers.lock().unwrap();
-        servers
-            .iter()
-            .enumerate()
-            .filter(|(_offset, active)| **active)
-            .filter_map(|(offset, _server)| self.servers.get(offset))
+        self.conns
+            .lock()
+            .unwrap()
+            .active_servers()
+            .map(|hostname| hostname.clone())
             .collect()
     }
 
@@ -285,9 +281,7 @@ impl Client {
         let (ctdtx, mut ctdrx) = channel(CLIENT_CHANNEL_BOUND_SIZE);
         let ctx_conn = ctx.clone();
         let ctx2 = ctx.clone();
-        let wait_for_all_servers = self.active_servers.clone();
         let connector_servers = self.servers.clone();
-        let connector_active_servers = self.active_servers.clone();
         let client_id = self.client_id.clone();
         let handler_client_data = self.client_data.clone();
         let connector_conns = self.conns.clone();
@@ -325,14 +319,16 @@ impl Client {
                                     }
                                     Ok(stream) => {
                                         info!("Connected to {}", server);
-                                        connector_active_servers.lock().unwrap()[offset] = true;
                                         let pc = PacketCodec {};
+                                        /*
                                         if !connector_active_servers.lock().unwrap()[offset] {
                                             warn!(
                                                 "Received offset of disconnected server, ignoring"
                                             );
                                             continue;
                                         }
+                                        This probably should not be needed.
+                                        */
                                         let (mut sink, mut stream) = pc.framed(stream).split();
                                         if let Some(ref client_id) = client_id {
                                             let req = new_req(SET_CLIENT_ID, client_id.clone());
@@ -352,6 +348,7 @@ impl Client {
                                             server.into(),
                                             tx2,
                                             handler_client_data.clone(),
+                                            true,
                                         );
                                         trace!("Inserting at {}", offset);
                                         connector_conns
@@ -359,8 +356,7 @@ impl Client {
                                             .unwrap()
                                             .insert(offset, handler.clone());
                                         trace!("Inserted at {}", offset);
-                                        let reader_active_servers =
-                                            connector_active_servers.clone();
+                                        let reader_conns = connector_conns.clone();
                                         let reader_ctx = ctx2.clone();
                                         let reader = async move {
                                             let tx = tx.clone();
@@ -384,20 +380,28 @@ impl Client {
                                                     error!("receiver dropped")
                                                 }
                                             }
-                                            reader_active_servers.lock().unwrap()[offset] = false;
+                                            reader_conns
+                                                .lock()
+                                                .unwrap()
+                                                .get_mut(offset)
+                                                .and_then(|conn| Some(conn.set_active(false)));
                                             if let Err(e) = reader_ctx.send(offset).await {
                                                 error!("Can't send to connector, aborting! {}", e);
                                             }
                                         };
-                                        let writer_active_servers =
-                                            connector_active_servers.clone();
+                                        let writer_conns = connector_conns.clone();
                                         let writer = async move {
                                             while let Some(packet) = rx.recv().await {
                                                 trace!("Sending {:?}", &packet);
                                                 if let Err(_) = sink.send(packet).await {
                                                     error!("Connection ({}) dropped", offset);
-                                                    writer_active_servers.lock().unwrap()[offset] =
-                                                        false;
+                                                    writer_conns
+                                                        .lock()
+                                                        .unwrap()
+                                                        .get_mut(offset)
+                                                        .and_then(|conn| {
+                                                            Some(conn.set_active(false))
+                                                        });
                                                 }
                                             }
                                         };
@@ -421,7 +425,7 @@ impl Client {
         for (i, _) in self.servers.iter().enumerate() {
             ctx.send(i).await.expect("Connector RX lives");
         }
-        let mut waiting_for = wait_for_all_servers.lock().unwrap().len();
+        let mut waiting_for = self.servers.len();
         loop {
             info!("Waiting for {}", waiting_for);
             match ctdrx.recv().await {
@@ -566,24 +570,15 @@ impl Client {
         // TODO: mapping?
         {
             let conns = self.conns.lock().unwrap();
-            let conn = match conns
-                .iter()
-                .enumerate()
-                .find(|(offset, c)| {
-                    if self.active_servers.lock().unwrap()[*offset] {
-                        if let Some(c) = c {
-                            c.server() == handle.server()
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                })
-                .map(|(_offset, conn)| conn)
-            {
+            let conn = match conns.get_by_server(handle.server()).and_then(|conn| {
+                if conn.is_active() {
+                    Some(conn)
+                } else {
+                    None
+                }
+            }) {
                 None => return Err(io::Error::new(ErrorKind::Other, "No connection for job")),
-                Some(conn) => conn.as_ref().unwrap(),
+                Some(conn) => conn,
             };
             let mut payload = BytesMut::with_capacity(handle.handle().len());
             payload.extend(handle.handle());
