@@ -1,6 +1,6 @@
 use std::{io::ErrorKind, net::SocketAddr, time::Duration};
 
-use rustygear::client::{Client, WorkUpdate};
+use rustygear::client::{Client, WorkUpdate, WorkerJob};
 use rustygeard::testutil::start_test_server;
 use tokio::time::{sleep, timeout};
 
@@ -282,5 +282,54 @@ async fn test_work_fail() {
         assert_eq!(handle, job.handle().handle())
     } else {
         panic!("Job did not fail! {:?}", response);
+    }
+}
+
+#[tokio::test]
+async fn test_work_status() {
+    let server = start_test_server().unwrap();
+    let worker = connect_with_client_id(server.addr(), "status-worker").await;
+    fn sends_status(work: &mut WorkerJob) -> Result<Vec<u8>, std::io::Error> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        rt.block_on(work.work_status(50, 100))?;
+        Ok("Done".into())
+    }
+    let mut worker = worker
+        .can_do("statusfunc", sends_status)
+        .await
+        .expect("CAN_DO should succeed");
+    let mut client: Client = connect(server.addr()).await;
+    let mut job = client
+        .submit("statusfunc", b"statuspayload")
+        .await
+        .expect("Submit should succeed");
+    worker
+        .do_one_job()
+        .await
+        .expect("One job should be completed");
+    let response = job.response().await.expect("Should receive a WorkUpdate");
+    if let WorkUpdate::Status {
+        handle,
+        numerator,
+        denominator,
+    } = response
+    {
+        assert_eq!(handle, job.handle().handle());
+        assert_eq!(numerator, 50);
+        assert_eq!(denominator, 100);
+    } else {
+        panic!("No status returned! {:?}", response);
+    }
+    let response2 = job
+        .response()
+        .await
+        .expect("Second response should be complete");
+    if let WorkUpdate::Complete { handle, payload } = response2 {
+        assert_eq!(handle, job.handle().handle());
+        assert_eq!(payload, "Done");
+    } else {
+        panic!("Did not return a WORK_COMPLETE! {:?}", response2);
     }
 }
