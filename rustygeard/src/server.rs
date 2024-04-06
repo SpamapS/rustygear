@@ -1,23 +1,21 @@
-use std::collections::{HashMap, BTreeMap};
+use std::collections::{BTreeMap, HashMap};
 use std::convert::TryInto;
 use std::io;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use futures::stream::StreamExt;
 use futures::SinkExt;
-use rustygear::constants::{NOOP};
+use rustygear::constants::NOOP;
 use rustygear::util::new_req;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
 use tokio::sync::mpsc::channel;
 
-use tokio_util::codec::
-
-Decoder;
+use tokio_util::codec::Decoder;
 use tower_service::Service;
 
 use rustygear::codec::{Packet, PacketCodec};
@@ -43,7 +41,7 @@ impl GearmanServer {
         rt.block_on(async move {
             let listener = match TcpListener::bind(&addr).await {
                 Err(e) => return Err(e),
-                Ok(listener) => listener
+                Ok(listener) => listener,
             };
             let shutdown: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
             Ok(loop {
@@ -93,7 +91,16 @@ impl GearmanServer {
                                 workers_by_conn_id.insert(conn_id, service.worker.clone());
                             }
                             while let Some(frame) = stream.next().await {
-                                let response = service.call(frame.unwrap()).await;
+                                let response = match frame {
+                                    Err(e) => {
+                                        warn!(
+                                            "Connection ({}) dropped while reading: {}",
+                                            conn_id, e
+                                        );
+                                        break;
+                                    }
+                                    Ok(frame) => service.call(frame).await,
+                                };
                                 if let Ok(response) = response {
                                     if let Err(_) = reader_tx.send(response).await {
                                         error!("receiver dropped!");

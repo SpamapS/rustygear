@@ -333,3 +333,32 @@ async fn test_work_status() {
         panic!("Did not return a WORK_COMPLETE! {:?}", response2);
     }
 }
+
+#[tokio::test]
+async fn test_unique_routing() {
+    // Jobs with explicit unique IDs should always be sent to the same gearmand
+    // We need lots of servers on the ring to be more confident about this
+    // effect otherwise the test could be flaky if the hasher's RNG is fooling us.
+    let servers: Vec<rustygeard::testutil::ServerGuard> = (0..10)
+        .map(|_i| start_test_server().expect("Starting test server"))
+        .collect();
+    let client1 = Client::new();
+    let client2 = Client::new();
+    let client1 = servers.iter().fold(client1, |client, server| {
+        client.add_server(&server.addr().to_string())
+    });
+    let client2 = servers.iter().fold(client2, |client, server| {
+        client.add_server(&server.addr().to_string())
+    });
+    let mut client1 = client1.connect().await.expect("Connecting to all servers");
+    let mut client2 = client2.connect().await.expect("Connecting to all servers");
+    let job1 = client1
+        .submit_unique("testfunc", b"uniqid1", b"dostuff")
+        .await
+        .expect("Submitting a job");
+    let job2 = client2
+        .submit_unique("testfunc", b"uniqid1", b"dootherstuff")
+        .await
+        .expect("Submitting a job");
+    assert_eq!(job1.handle().server(), job2.handle().server());
+}
