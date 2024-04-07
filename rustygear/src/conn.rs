@@ -387,16 +387,29 @@ impl Connections {
             .as_ref()
     }
 
+    // TODO: Make this a client configurable
+    const HASH_RING_REPLICAS: usize = 1;
     pub fn get_hashed_conn(&mut self, hashable: &Vec<u8>) -> Option<&mut ConnHandler> {
-        match self.ring.get(hashable) {
+        match self
+            .ring
+            .get_with_replicas(hashable, Self::HASH_RING_REPLICAS)
+        {
             None => None,
-            Some(ring_index) => match self.conns.get_mut(*ring_index) {
-                None => None,
-                Some(c) => match c {
+            Some(offsets) => {
+                match offsets.iter().find(|offset| {
+                    self.conns
+                        .get(**offset)
+                        .and_then(|c| c.as_ref().and_then(|c2| Some(c2.is_active())))
+                        .unwrap_or(false)
+                }) {
+                    Some(offset) => self
+                        .conns
+                        .get_mut(*offset)
+                        .expect("Logic error in conns find predicate")
+                        .as_mut(),
                     None => None,
-                    Some(c) => Some(c),
-                },
-            },
+                }
+            }
         }
     }
 

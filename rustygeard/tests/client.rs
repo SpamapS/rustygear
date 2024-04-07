@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, net::SocketAddr, time::Duration};
+use std::{collections::LinkedList, io::ErrorKind, net::SocketAddr, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate, WorkerJob};
 use rustygeard::testutil::start_test_server;
@@ -339,7 +339,7 @@ async fn test_unique_routing() {
     // Jobs with explicit unique IDs should always be sent to the same gearmand
     // We need lots of servers on the ring to be more confident about this
     // effect otherwise the test could be flaky if the hasher's RNG is fooling us.
-    let servers: Vec<rustygeard::testutil::ServerGuard> = (0..10)
+    let mut servers: Vec<rustygeard::testutil::ServerGuard> = (0..10)
         .map(|_i| start_test_server().expect("Starting test server"))
         .collect();
     let client1 = Client::new();
@@ -361,4 +361,26 @@ async fn test_unique_routing() {
         .await
         .expect("Submitting a job");
     assert_eq!(job1.handle().server(), job2.handle().server());
+    let routed_server = job1.handle().server();
+    // Now let's kill that server and see if the next two jobs go to the same fallback place
+    let (offset, _serverguard) = servers
+        .iter()
+        .enumerate()
+        .find(|(_offset, server)| server.addr().to_string() == *routed_server)
+        .expect("Find server we just used in server list");
+    servers.swap_remove(offset);
+    // Wait until it's not in active servers
+    loop {
+        if client1.active_servers().contains(routed_server) {
+            sleep(Duration::from_millis(100)).await;
+        } else {
+            break;
+        }
+    }
+    // Now another should route to a different server
+    let after_dcon = client1
+        .submit_unique("testfunc", b"uniqid1", b"afterdcon")
+        .await
+        .expect("Submitting a job after losing one server");
+    assert_ne!(after_dcon.handle().server(), routed_server);
 }
