@@ -1,4 +1,4 @@
-use std::{collections::LinkedList, io::ErrorKind, net::SocketAddr, time::Duration};
+use std::{io::ErrorKind, net::SocketAddr, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate, WorkerJob};
 use rustygeard::testutil::start_test_server;
