@@ -23,6 +23,7 @@ pub trait HandleJobStorage {
     fn new_job_storage() -> SharedJobStorage;
     fn coalesce_unique(&mut self, unique: &Bytes, remote: Option<usize>) -> Option<Bytes>;
     fn add_job(&mut self, job: Arc<Job>, priority: JobQueuePriority, remote: Option<usize>);
+    fn has_job(&self, worker: &mut Worker) -> bool;
     fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>>;
 }
 
@@ -152,6 +153,28 @@ impl HandleJobStorage for SharedJobStorage {
             Arc::weak_count(&job),
             Arc::strong_count(&job)
         );
+    }
+
+    fn has_job(&self, worker: &mut Worker) -> bool {
+        let storage = self.lock().unwrap();
+        for func in worker.iter() {
+            if let Some(prios) = storage.queues.get(&func) {
+                let mut prio = 0;
+                for q in prios {
+                    prio = prio + 1;
+                    for job in q.iter() {
+                        if let Some(_job) = job.upgrade() {
+                            debug!(
+                                "Worker {:?} has a job in func {:?} prio {}",
+                                worker, func, prio
+                            );
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     fn get_job(&mut self, worker: &mut Worker) -> Option<Arc<Job>> {

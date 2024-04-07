@@ -14,7 +14,6 @@ fn test_server_starts() {
 
 #[tokio::test]
 async fn test_server_coalesces_uniqs() {
-    std::env::set_var("RUST_LOG", "debug");
     let server = start_test_server().expect("Starting test server");
     let mut client1 = Client::new()
         .add_server(&server.addr().to_string())
@@ -28,7 +27,7 @@ async fn test_server_coalesces_uniqs() {
         .connect()
         .await
         .expect("Connecting client2");
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let (tx, rx) = tokio::sync::mpsc::channel(2);
     let rx = Arc::new(Mutex::new(rx));
     let server_addr = server.addr().to_string().clone();
     thread::spawn(move || {
@@ -54,7 +53,7 @@ async fn test_server_coalesces_uniqs() {
                 })
                 .await
                 .expect("Sending CAN_DO and setting up worker function")
-                .do_one_job()
+                .work()
                 .await
                 .expect("Doing one job");
         });
@@ -88,5 +87,35 @@ async fn test_server_coalesces_uniqs() {
         }
     } else {
         panic!("Response 1 was not WORK_COMPLETE: {:?}", response1);
+    }
+    // And now, make sure different uniqids do not coalesce
+    let mut job1b = client1
+        .submit_unique("uniqfunc", b"uniqid1b", b"")
+        .await
+        .expect("submitting uniqid1b job");
+    let mut job2b = client2
+        .submit_unique("uniqfunc", b"uniqid2b", b"")
+        .await
+        .expect("submitting uniqid2b job");
+    tx.send(()).await.expect("Sending to let the worker finish");
+    tx.send(()).await.expect("Sending to let the worker finish");
+    let response1b = job1b.response().await.expect("Getting response from job1b");
+    let response2b = job2b.response().await.expect("Getting response from job2b");
+    if let WorkUpdate::Complete {
+        handle: handle1b,
+        payload: _,
+    } = response1b
+    {
+        if let WorkUpdate::Complete {
+            handle: handle2b,
+            payload: _,
+        } = response2b
+        {
+            assert_ne!(handle1b, handle2b);
+        } else {
+            panic!("job2b not a WORK_COMPLETE: {:?}", response2b);
+        }
+    } else {
+        panic!("job1b not a WORK_COMPLETE: {:?}", response1b);
     }
 }
