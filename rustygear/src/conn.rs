@@ -117,7 +117,7 @@ impl ConnHandler {
     }
 
     fn handle_noop(&self) -> Result<Packet, io::Error> {
-        Ok(new_req(GRAB_JOB, Bytes::new()))
+        Ok(new_req(GRAB_JOB_UNIQ, Bytes::new()))
     }
 
     fn handle_no_job(&self) -> Result<Packet, io::Error> {

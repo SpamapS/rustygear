@@ -225,8 +225,14 @@ impl GearmanService {
     fn handle_pre_sleep(&self) -> Result<Packet, io::Error> {
         let worker = self.worker.clone();
         let ref mut w = worker.lock().unwrap();
-        self.workers.clone().sleep(w, self.conn_id);
-        Ok(no_response())
+        let queues = self.queues.clone();
+        if queues.has_job(w) {
+            // We said NO_JOB, but now we have a job, so we need to wake it back up immediately.
+            Ok(new_noop())
+        } else {
+            self.workers.clone().sleep(w, self.conn_id);
+            Ok(no_response())
+        }
     }
 
     fn handle_submit_job(
