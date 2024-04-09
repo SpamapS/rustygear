@@ -474,7 +474,7 @@ checksum = "d626bb9dae77e28219937af045c257c28bfd3f69333c512553507f5f9798cb76"
 
 [[package]]
 name = "rustygear"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bytes",
  "env_logger",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "rustygeard"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bytes",
  "clap",
