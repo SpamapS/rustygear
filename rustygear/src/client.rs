@@ -1,4 +1,5 @@
 use core::fmt;
+use std::convert::TryFrom;
 use std::fmt::Display;
 /*
  * Copyright 2020 Clint Byrum
@@ -30,6 +31,10 @@ use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task;
 use tokio::time::sleep;
+
+use tokio_rustls::rustls::pki_types::ServerName;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::TlsConnector;
 use tokio_util::codec::Decoder;
 
 use uuid::Uuid;
@@ -39,6 +44,7 @@ use crate::codec::{Packet, PacketCodec};
 use crate::conn::{ConnHandler, Connections, ServerHandle};
 use crate::constants::*;
 use crate::util::{new_req, new_res};
+use crate::wrappedstream::WrappedStream;
 
 pub type Hostname = String;
 
@@ -85,6 +91,7 @@ pub struct Client {
     conns: Arc<Mutex<Connections>>,
     client_id: Option<Bytes>,
     client_data: ClientData,
+    tls: Option<ClientConfig>,
 }
 
 /// Return object for submit_ functions.
@@ -243,6 +250,7 @@ impl Client {
             conns: Arc::new(Mutex::new(Connections::new())),
             client_id: None,
             client_data: ClientData::new(),
+            tls: None,
         }
     }
 
@@ -250,6 +258,13 @@ impl Client {
     ///
     pub fn add_server(mut self, server: &str) -> Self {
         self.servers.push(Hostname::from(server));
+        self
+    }
+
+    /// Call this to enable TLS/SSL connections to servers.
+    /// This takes a rustls::ClientConfig object which allows a lot of flexiblity in how TLS operates.
+    pub fn set_tls_config(mut self, config: ClientConfig) -> Self {
+        self.tls = Some(config);
         self
     }
 
@@ -285,6 +300,7 @@ impl Client {
         let client_id = self.client_id.clone();
         let handler_client_data = self.client_data.clone();
         let connector_conns = self.conns.clone();
+        let tls = self.tls.clone();
         let connector = async move {
             trace!("Connector thread starting");
             loop {
@@ -301,7 +317,7 @@ impl Client {
                                 offset
                             ),
                             Some(server) => {
-                                let server: &str = server;
+                                let server = server.clone();
                                 let addr = server.to_socket_addrs().unwrap().next().unwrap();
                                 trace!("really connecting: i={} addr={:?}", offset, addr);
                                 match TcpStream::connect(addr).await {
@@ -317,7 +333,7 @@ impl Client {
                                             ctx_conn.send(offset).await
                                         });
                                     }
-                                    Ok(stream) => {
+                                    Ok(wholestream) => {
                                         info!("Connected to {}", server);
                                         let pc = PacketCodec {};
                                         /*
@@ -329,7 +345,42 @@ impl Client {
                                         }
                                         This probably should not be needed.
                                         */
-                                        let (mut sink, mut stream) = pc.framed(stream).split();
+                                        let (mut sink, mut stream) = match tls {
+                                            Some(ref config) => {
+                                                let connector: TlsConnector =
+                                                    TlsConnector::from(Arc::new(config.clone()));
+                                                let hostonly =
+                                                    String::from(server.split(':').next().unwrap());
+                                                let servername = match ServerName::try_from(
+                                                    hostonly,
+                                                ) {
+                                                    Err(e) => {
+                                                        error!("Could not look up server name via DNS: {}", e);
+                                                        continue;
+                                                    }
+                                                    Ok(servername) => servername,
+                                                };
+                                                info!("Connecting to {:?} with TLS", servername);
+                                                match connector
+                                                    .connect(servername, wholestream)
+                                                    .await
+                                                {
+                                                    Err(e) => {
+                                                        error!(
+                                                            "Could not complete TLS handshake: {}",
+                                                            e
+                                                        );
+                                                        continue;
+                                                    }
+                                                    Ok(tlsstream) => pc
+                                                        .framed(WrappedStream::from(tlsstream))
+                                                        .split(),
+                                                }
+                                            }
+                                            None => {
+                                                pc.framed(WrappedStream::from(wholestream)).split()
+                                            }
+                                        };
                                         if let Some(ref client_id) = client_id {
                                             let req = new_req(SET_CLIENT_ID, client_id.clone());
                                             if let Err(e) = sink.send(req).await {
@@ -343,9 +394,10 @@ impl Client {
                                         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX pick a good value or const
                                         let tx = tx.clone();
                                         let tx2 = tx.clone();
+                                        let connserver = server.clone();
                                         let handler = ConnHandler::new(
                                             &client_id,
-                                            server.into(),
+                                            connserver.into(),
                                             tx2,
                                             handler_client_data.clone(),
                                             true,
