@@ -81,11 +81,11 @@ impl Display for JobStatus {
 /// Client for interacting with Gearman service
 ///
 /// Both workers and clients will use this as the top-level object to communicate
-/// with a gearman server. [Client.new] should produce a functioning structure which
+/// with a gearman server. [Client::new] should produce a functioning structure which
 /// should then be configured as needed. It will not do anything useful until after
-/// [Client.connect] has been called.
+/// [Client::connect] has been called.
 ///
-/// See examples/client.rs and examples/worker.rs for information on how to use it.
+/// See examples for more information on how to use it.
 pub struct Client {
     servers: Vec<Hostname>,
     conns: Arc<Mutex<Connections>>,
@@ -111,11 +111,8 @@ impl fmt::Display for ClientJob {
     }
 }
 
-/// Passed to workers
+/// This structure is passed to worker functions after a JOB_ASSIGN_UNIQ packet is received.
 ///
-/// The sink_tx property of this structure can be used to send raw packets
-/// to the gearman server from workers, although this is not known to work
-/// generically as of this writing.
 pub struct WorkerJob {
     pub handle: Bytes,
     pub function: Bytes,
@@ -164,10 +161,9 @@ impl ClientJob {
         &self.handle
     }
 
-    /// Should only return when the worker has sent data or completed the job. Errors if used on background jobs.
+    /// Should only return when the worker has sent data or completed the job.
     ///
-    /// Use this in clients to wait for a response on a job that was submitted. This will block
-    /// forever or error if used on a background job.
+    /// Use this in clients to wait for a response on a job that was submitted. This will return an error if used on a background job.
     pub async fn response(&mut self) -> Result<WorkUpdate, io::Error> {
         if let Some(workupdate) = self.response_rx.recv().await {
             Ok(workupdate)
@@ -194,10 +190,21 @@ impl WorkerJob {
     /// Sends a WORK_STATUS
     ///
     /// This will send a WORK_STATUS packet to the server, and can be called from a worker,
-    /// although that worker may need to manage its own runtime, and as of this writing, this
-    /// method may not be functional.
+    /// although that worker may need to manage its own async runtime to execute this function.
     ///
-    /// See examples/worker.rs for an idea of how it may work.
+    /// ```no_run
+    /// use rustygear::client::{Client, WorkerJob};
+    /// let worker = Client::new();
+    /// fn sends_status(work: &mut WorkerJob) -> Result<Vec<u8>, std::io::Error> {
+    ///     let rt = tokio::runtime::Builder::new_current_thread()
+    ///         .build()
+    ///         .unwrap();
+    ///     rt.block_on(work.work_status(50, 100))?;
+    ///     Ok("Done".into())
+    /// }
+    /// let mut worker = worker
+    ///     .can_do("statusfunc", sends_status);
+    /// ```
     pub async fn work_status(&mut self, numerator: u32, denominator: u32) -> Result<(), io::Error> {
         let numerator = format!("{}", numerator);
         let denominator = format!("{}", denominator);
@@ -222,7 +229,7 @@ impl WorkerJob {
 
     /// Sends a WORK_FAIL
     ///
-    /// This method is typically called by the [Client.work] method upon return
+    /// This method is typically called by the [Client::work] method upon return
     /// of an error from the assigned closure.
     pub async fn work_fail(&mut self) -> Result<(), io::Error> {
         let packet = new_res(WORK_FAIL, self.handle.clone());
@@ -231,7 +238,7 @@ impl WorkerJob {
 
     /// Sends a WORK_COMPLETE
     ///
-    /// This method is typically called by the [Client.work] method upon return of
+    /// This method is typically called by the [Client::work] method upon return of
     /// the assigned closure.
     pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
         let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
@@ -261,8 +268,8 @@ impl Client {
         self
     }
 
-    /// Call this to enable TLS/SSL connections to servers.
-    /// This takes a rustls::ClientConfig object which allows a lot of flexiblity in how TLS operates.
+    /// Call this to enable TLS/SSL connections to servers. If it is never called, the connection will remain plain.
+    /// This takes a [ClientConfig] object which allows a lot of flexibility in how TLS will operate.
     pub fn set_tls_config(mut self, config: ClientConfig) -> Self {
         self.tls = Some(config);
         self
@@ -497,7 +504,7 @@ impl Client {
         Ok(self)
     }
 
-    /// Sends an ECHO_REQ to the server, a good way to confirm the connection is alive
+    /// Sends an ECHO_REQ to the first server, a good way to confirm the connection is alive
     ///
     /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
@@ -523,13 +530,14 @@ impl Client {
         Ok(())
     }
 
-    /// Submits a foreground job. The see [ClientJob.response] for how to see the response from the
-    /// worker.
+    /// Submits a foreground job. The see [ClientJob::response] for how to see the response from the
+    /// worker. The unique ID will be generated using [Uuid::new_v4]
     pub async fn submit(&mut self, function: &str, payload: &[u8]) -> Result<ClientJob, io::Error> {
         self.direct_submit(SUBMIT_JOB, function, payload, None)
             .await
     }
 
+    /// Submits a job with an explicit unique ID.
     pub async fn submit_unique(
         &mut self,
         function: &str,
@@ -541,7 +549,7 @@ impl Client {
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
-    /// [ClientJob.response] method because the server will never send packets for it.
+    /// [ClientJob::response] method because the server will never send packets for it.
     pub async fn submit_background(
         &mut self,
         function: &str,
@@ -552,7 +560,7 @@ impl Client {
     }
 
     /// Submits a background job. The [ClientJob] returned won't be able to use the
-    /// [ClientJob.response] method because the server will never send packets for it.
+    /// [ClientJob::response] method because the server will never send packets for it.
     pub async fn submit_background_unique(
         &mut self,
         function: &str,
@@ -712,7 +720,7 @@ impl Client {
     }
 
     /// Receive and do just one job. Will not return until a job is done or there
-    /// is an error. See [Client.work] for more information.
+    /// is an error. This is called in a loop by [Client::work].
     pub async fn do_one_job(&mut self) -> Result<(), io::Error> {
         let job = self.client_data.receivers().worker_job_rx.try_recv();
         let job = match job {
@@ -769,7 +777,7 @@ impl Client {
     /// Run the assigned jobs through can_do functions until an error happens
     ///
     /// After you have set up all functions your worker can do via the
-    /// [Client.can_do] method, call this function to begin working. It will
+    /// [Client::can_do] method, call this function to begin working. It will
     /// not return unless there is an unexpected error.
     ///
     /// See examples/worker.rs for more information on how to use it.
