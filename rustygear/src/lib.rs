@@ -7,4 +7,4 @@ pub mod conn;
 pub mod constants;
 pub mod job;
 pub mod util;
-mod wrappedstream;
+pub mod wrappedstream;

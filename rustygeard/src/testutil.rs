@@ -45,7 +45,7 @@ pub fn start_test_server() -> Option<ServerGuard> {
         let addr: SocketAddr = format!("[::1]:{port}").parse().unwrap();
         let (tx, rx): (SyncSender<bool>, Receiver<bool>) = sync_channel(1);
         let serv = std::thread::spawn(move || {
-            match GearmanServer::run(addr.clone()) {
+            match GearmanServer::run(addr.clone(), None) {
                 Ok(_) => info!("Server exited cleanly."),
                 Err(e) => {
                     error!("Server failed: {:?}", e);

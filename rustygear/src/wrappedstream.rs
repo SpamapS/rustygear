@@ -4,19 +4,26 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::TcpStream,
 };
-use tokio_rustls::client::TlsStream;
+use tokio_rustls::{client, server};
 
 #[derive(Debug)]
 pub enum WrappedStream {
-    Tls(Box<TlsStream<TcpStream>>),
+    ClientTls(Box<client::TlsStream<TcpStream>>),
+    ServerTls(Box<server::TlsStream<TcpStream>>),
     Plain(TcpStream),
 }
 
 impl Unpin for WrappedStream {}
 
-impl From<TlsStream<TcpStream>> for WrappedStream {
-    fn from(value: TlsStream<TcpStream>) -> Self {
-        WrappedStream::Tls(Box::new(value))
+impl From<client::TlsStream<TcpStream>> for WrappedStream {
+    fn from(value: client::TlsStream<TcpStream>) -> Self {
+        WrappedStream::ClientTls(Box::new(value))
+    }
+}
+
+impl From<server::TlsStream<TcpStream>> for WrappedStream {
+    fn from(value: server::TlsStream<TcpStream>) -> Self {
+        WrappedStream::ServerTls(Box::new(value))
     }
 }
 
@@ -33,7 +40,8 @@ impl AsyncRead for WrappedStream {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match &mut *self {
-            WrappedStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+            WrappedStream::ClientTls(stream) => Pin::new(stream).poll_read(cx, buf),
+            WrappedStream::ServerTls(stream) => Pin::new(stream).poll_read(cx, buf),
             WrappedStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
         }
     }
@@ -47,7 +55,8 @@ impl AsyncWrite for WrappedStream {
     ) -> std::task::Poll<Result<usize, std::io::Error>> {
         match &mut *self {
             WrappedStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
-            WrappedStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+            WrappedStream::ClientTls(stream) => Pin::new(stream).poll_write(cx, buf),
+            WrappedStream::ServerTls(stream) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -57,7 +66,8 @@ impl AsyncWrite for WrappedStream {
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match &mut *self {
             WrappedStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
-            WrappedStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
+            WrappedStream::ClientTls(stream) => Pin::new(stream).poll_flush(cx),
+            WrappedStream::ServerTls(stream) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -67,7 +77,8 @@ impl AsyncWrite for WrappedStream {
     ) -> std::task::Poll<Result<(), std::io::Error>> {
         match &mut *self {
             WrappedStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
-            WrappedStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+            WrappedStream::ClientTls(stream) => Pin::new(stream).poll_shutdown(cx),
+            WrappedStream::ServerTls(stream) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
