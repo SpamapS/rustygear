@@ -1,4 +1,5 @@
 use core::fmt;
+#[cfg(feature = "tls")]
 use std::convert::TryFrom;
 use std::fmt::Display;
 /*
@@ -32,8 +33,11 @@ use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task;
 use tokio::time::sleep;
 
+#[cfg(feature = "tls")]
 use tokio_rustls::rustls::pki_types::ServerName;
+#[cfg(feature = "tls")]
 use tokio_rustls::rustls::ClientConfig;
+#[cfg(feature = "tls")]
 use tokio_rustls::TlsConnector;
 use tokio_util::codec::Decoder;
 
@@ -91,7 +95,10 @@ pub struct Client {
     conns: Arc<Mutex<Connections>>,
     client_id: Option<Bytes>,
     client_data: ClientData,
+    #[cfg(feature = "tls")]
     tls: Option<ClientConfig>,
+    #[cfg(not(feature = "tls"))]
+    tls: Option<()>,
 }
 
 /// Return object for submit_ functions.
@@ -270,6 +277,9 @@ impl Client {
 
     /// Call this to enable TLS/SSL connections to servers. If it is never called, the connection will remain plain.
     /// This takes a [ClientConfig] object which allows a lot of flexibility in how TLS will operate.
+    ///
+    /// Only available when the "tls" feature is enabled.
+    #[cfg(feature = "tls")]
     pub fn set_tls_config(mut self, config: ClientConfig) -> Self {
         self.tls = Some(config);
         self
@@ -353,6 +363,9 @@ impl Client {
                                         This probably should not be needed.
                                         */
                                         let (mut sink, mut stream) = match tls {
+                                            #[cfg(not(feature = "tls"))]
+                                            Some(_) => unreachable!("We shouldn't have a tls config without feature = tls"),
+                                            #[cfg(feature = "tls")]
                                             Some(ref config) => {
                                                 let connector: TlsConnector =
                                                     TlsConnector::from(Arc::new(config.clone()));

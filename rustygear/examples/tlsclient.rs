@@ -1,8 +1,11 @@
 //use tokio::prelude::*;
 
+#[cfg(feature = "tls")]
 use std::{fmt::Debug, sync::Arc};
 
+#[cfg(feature = "tls")]
 use rustygear::client::Client;
+#[cfg(feature = "tls")]
 use tokio_rustls::rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
     ClientConfig, SignatureScheme,
@@ -10,6 +13,7 @@ use tokio_rustls::rustls::{
 #[derive(Debug)]
 struct DebugVerifier {}
 
+#[cfg(feature = "tls")]
 impl ServerCertVerifier for DebugVerifier {
     fn verify_server_cert(
         &self,
@@ -76,7 +80,13 @@ impl ServerCertVerifier for DebugVerifier {
     }
 }
 
+#[cfg(not(feature = "tls"))]
+fn main() {
+    println!("TLS not enabled.")
+}
+
 #[tokio::main]
+#[cfg(feature = "tls")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let server = "localhost:4730";

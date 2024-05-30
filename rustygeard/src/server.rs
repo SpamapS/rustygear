@@ -16,7 +16,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime;
 use tokio::sync::mpsc::channel;
 
+#[cfg(feature = "tls")]
 use tokio_rustls::rustls::ServerConfig;
+#[cfg(feature = "tls")]
 use tokio_rustls::TlsAcceptor;
 use tokio_util::codec::Decoder;
 use tower_service::Service;
@@ -32,8 +34,18 @@ pub struct GearmanServer;
 const MAX_UNHANDLED_OUT_FRAMES: usize = 1024;
 const SHUTDOWN_BUFFER_SIZE: usize = 4;
 
+#[cfg(feature = "tls")]
+pub type TlsConfig = Option<ServerConfig>;
+#[cfg(not(feature = "tls"))]
+pub type TlsConfig = Option<()>;
+
+#[cfg(feature = "tls")]
+type Acceptor = Option<TlsAcceptor>;
+#[cfg(not(feature = "tls"))]
+type Acceptor = Option<()>;
+
 impl GearmanServer {
-    pub fn run(addr: SocketAddr, tls: Option<ServerConfig>) -> io::Result<()> {
+    pub fn run(addr: SocketAddr, tls: TlsConfig) -> io::Result<()> {
         let queues = SharedJobStorage::new_job_storage();
         let workers = SharedWorkers::new_workers();
         let job_count = Arc::new(AtomicUsize::new(0));
@@ -41,9 +53,12 @@ impl GearmanServer {
         let workers_by_conn_id = Arc::new(Mutex::new(BTreeMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
         let rt = runtime::Runtime::new().unwrap();
-        let acceptor = match tls {
+        let acceptor: Acceptor = match tls {
             None => None,
+            #[cfg(feature = "tls")]
             Some(config) => Some(TlsAcceptor::from(Arc::new(config))),
+            #[cfg(not(feature = "tls"))]
+            Some(_) => unreachable!("Should not have a TLS config without tls feature"),
         };
         rt.block_on(async move {
             let listener = match TcpListener::bind(&addr).await {
@@ -66,6 +81,7 @@ impl GearmanServer {
                 let conn_id: usize = plain_sock.as_raw_fd().try_into().unwrap();
                 let sock = match acceptor {
                     None => WrappedStream::from(plain_sock),
+                    #[cfg(feature = "tls")]
                     Some(ref acceptor) => {
                         let tls_sock = match acceptor.accept(plain_sock).await {
                             Ok(tls_sock) => tls_sock,
@@ -79,6 +95,8 @@ impl GearmanServer {
                         };
                         WrappedStream::from(tls_sock)
                     }
+                    #[cfg(not(feature = "tls"))]
+                    Some(_) => unreachable!("Should not have a TLS acceptor without tls feature"),
                 };
                 // TODO: new connection ID needed
                 let pc = PacketCodec {};

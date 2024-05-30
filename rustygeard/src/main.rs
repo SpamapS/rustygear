@@ -5,16 +5,17 @@ extern crate env_logger;
 extern crate rustygear;
 extern crate rustygeard;
 
-use std::{
-    fs::File,
-    io::BufReader,
-    process::{exit, ExitCode},
-    sync::Arc,
-};
+use std::process::ExitCode;
+#[cfg(feature = "tls")]
+use std::{fs::File, io::BufReader, process::exit, sync::Arc};
 
-use clap::{command, Arg, ArgAction};
+#[cfg(feature = "tls")]
+use clap::ArgAction;
+use clap::{command, Arg};
+#[cfg(feature = "tls")]
 use rustls_pemfile::{certs, private_key};
 use rustygeard::server::GearmanServer;
+#[cfg(feature = "tls")]
 use tokio_rustls::rustls::{
     server::{VerifierBuilderError, WebPkiClientVerifier},
     RootCertStore, ServerConfig,
@@ -23,49 +24,52 @@ use tokio_rustls::rustls::{
 const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
-    let matches = command!()
-        .version(VERSION)
-        .about("See http://gearman.org/protocol")
-        .arg(
-            Arg::new("listen")
-                .short('L')
-                .long("listen")
-                .value_name("Address:port")
-                .help("Server will listen on this address")
-                .default_value("0.0.0.0:4730")
-                .num_args(1),
-        )
-        .arg(
-            Arg::new("tls")
-                .long("tls")
-                .help("Enable TLS")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("tls-key")
-                .long("tls-key")
-                .help("Path to PEM encoded TLS key file")
-                .num_args(1)
-                .requires("tls-key")
-                .requires("tls-cert"),
-        )
-        .arg(
-            Arg::new("tls-cert")
-                .long("tls-cert")
-                .help("Path to PEM encoded server certificate")
-                .num_args(1)
-                .requires("tls")
-                .requires("tls-key"),
-        )
-        .arg(
-            Arg::new("tls-ca")
-                .long("tls-ca")
-                .help("Path to CA for validating client certificates in TLS")
-                .num_args(1)
-                .requires("tls"),
-        )
-        .get_matches();
-
+    let matches = {
+        let command = command!()
+            .version(VERSION)
+            .about("See http://gearman.org/protocol")
+            .arg(
+                Arg::new("listen")
+                    .short('L')
+                    .long("listen")
+                    .value_name("Address:port")
+                    .help("Server will listen on this address")
+                    .default_value("0.0.0.0:4730")
+                    .num_args(1),
+            );
+        #[cfg(feature = "tls")]
+        let command = command
+            .arg(
+                Arg::new("tls")
+                    .long("tls")
+                    .help("Enable TLS")
+                    .action(ArgAction::SetTrue),
+            )
+            .arg(
+                Arg::new("tls-key")
+                    .long("tls-key")
+                    .help("Path to PEM encoded TLS key file")
+                    .num_args(1)
+                    .requires("tls-key")
+                    .requires("tls-cert"),
+            )
+            .arg(
+                Arg::new("tls-cert")
+                    .long("tls-cert")
+                    .help("Path to PEM encoded server certificate")
+                    .num_args(1)
+                    .requires("tls")
+                    .requires("tls-key"),
+            )
+            .arg(
+                Arg::new("tls-ca")
+                    .long("tls-ca")
+                    .help("Path to CA for validating client certificates in TLS")
+                    .num_args(1)
+                    .requires("tls"),
+            );
+        command.get_matches()
+    };
     let listen = matches
         .get_one::<String>("listen")
         .expect("default_value should ensure this");
@@ -73,6 +77,7 @@ fn main() -> ExitCode {
 
     info!("Binding to {}", listen);
     let address = listen.parse().unwrap();
+    #[cfg(feature = "tls")]
     let tls = match matches.get_flag("tls") {
         false => None,
         true => {
@@ -175,6 +180,8 @@ fn main() -> ExitCode {
             )
         }
     };
+    #[cfg(not(feature = "tls"))]
+    let tls = None;
     if let Err(e) = GearmanServer::run(address, tls) {
         eprintln!("Error: {}", e);
         return ExitCode::FAILURE;
