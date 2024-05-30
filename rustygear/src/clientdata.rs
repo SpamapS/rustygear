@@ -1,9 +1,15 @@
-use std::{collections::HashMap, sync::{Arc, Mutex, MutexGuard, RwLock}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, MutexGuard, RwLock},
+};
 
 use bytes::Bytes;
-use tokio::sync::mpsc::{Sender, Receiver, channel};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
-use crate::{client::{WorkUpdate, WorkerJob, JobStatus}, conn::ServerHandle};
+use crate::{
+    client::{JobStatus, WorkUpdate, WorkerJob},
+    conn::ServerHandle,
+};
 
 pub type JobCreated = ServerHandle;
 
@@ -55,7 +61,10 @@ pub struct ClientData {
 
 impl Clone for ClientData {
     fn clone(&self) -> Self {
-        Self { receivers: self.receivers.clone(), senders: self.senders.clone() }
+        Self {
+            receivers: self.receivers.clone(),
+            senders: self.senders.clone(),
+        }
     }
 }
 
@@ -67,7 +76,7 @@ impl ClientReceivers {
         error_rx: Receiver<(Bytes, Bytes)>,
         worker_job_rx: Receiver<WorkerJob>,
     ) -> ClientReceivers {
-        ClientReceivers{
+        ClientReceivers {
             echo_rx: echo_rx,
             job_created_rx: job_created_rx,
             status_res_rx: status_res_rx,
@@ -87,8 +96,20 @@ impl ClientData {
         let (error_tx, error_rx) = channel(CLIENT_CHANNEL_BOUND_SIZE);
         let (worker_job_tx, worker_job_rx) = channel(CLIENT_CHANNEL_BOUND_SIZE);
         ClientData {
-            receivers: Arc::new(Mutex::new(ClientReceivers::new(echo_rx, job_created_rx, status_res_rx, error_rx, worker_job_rx))),
-            senders: Arc::new(RwLock::new(ClientSenders::new(echo_tx, job_created_tx, status_res_tx, error_tx, worker_job_tx))),
+            receivers: Arc::new(Mutex::new(ClientReceivers::new(
+                echo_rx,
+                job_created_rx,
+                status_res_rx,
+                error_rx,
+                worker_job_rx,
+            ))),
+            senders: Arc::new(RwLock::new(ClientSenders::new(
+                echo_tx,
+                job_created_tx,
+                status_res_tx,
+                error_tx,
+                worker_job_tx,
+            ))),
         }
     }
 
@@ -125,7 +146,11 @@ impl ClientData {
     }
 
     pub fn set_sender_by_handle(&mut self, handle: ServerHandle, tx: Sender<WorkUpdate>) {
-        self.senders.write().unwrap().senders_by_handle.insert(handle, tx);
+        self.senders
+            .write()
+            .unwrap()
+            .senders_by_handle
+            .insert(handle, tx);
     }
 
     pub fn get_jobs_tx_by_func(&self, func: &Vec<u8>) -> Option<Sender<WorkerJob>> {
@@ -136,6 +161,10 @@ impl ClientData {
     }
 
     pub fn set_jobs_tx_by_func(&mut self, func: Vec<u8>, tx: Sender<WorkerJob>) {
-        self.senders.write().unwrap().jobs_tx_by_func.insert(func, tx);
+        self.senders
+            .write()
+            .unwrap()
+            .jobs_tx_by_func
+            .insert(func, tx);
     }
 }

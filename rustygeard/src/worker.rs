@@ -3,8 +3,8 @@ extern crate wrappinghashset;
 use self::wrappinghashset::{Iter, WrappingHashSet};
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 
