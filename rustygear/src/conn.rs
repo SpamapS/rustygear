@@ -389,6 +389,8 @@ impl Connections {
 
     // TODO: Make this a client configurable
     const HASH_RING_REPLICAS: usize = 1;
+
+    // This is run with locks held so it is very important that it not panic!
     pub fn get_hashed_conn(&mut self, hashable: &Vec<u8>) -> Option<&mut ConnHandler> {
         match self
             .ring

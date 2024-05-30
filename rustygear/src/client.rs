@@ -298,7 +298,7 @@ impl Client {
         // Active servers will have a writer and a reader
         self.conns
             .lock()
-            .unwrap()
+            .expect("All lock holders should not panic")
             .active_servers()
             .map(|hostname| hostname.clone())
             .collect()
@@ -522,19 +522,23 @@ impl Client {
     /// Returns an error if there aren't any connected servers, or no ECHO_RES comes back
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), io::Error> {
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
-        if self.conns.lock().unwrap().len() < 1 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "No connections for echo!",
-            ));
-        }
-        self.conns
-            .lock()
-            .unwrap()
-            .get(0)
-            .unwrap()
-            .send_packet(packet)
-            .await?;
+        {
+            let conns = self
+                .conns
+                .lock()
+                .expect("All lock holders should not panic");
+            if conns.len() < 1 {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "No connections for echo!",
+                ));
+            }
+            conns
+                .get(0)
+                .expect("Conns is locked by mutex and we checked length above")
+                .send_packet(packet)
+                .await?;
+        } // Unlock conns
         debug!("Waiting for echo response");
         match self.client_data.receivers().echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
@@ -607,7 +611,10 @@ impl Client {
         data.extend(payload);
         let packet = new_req(ptype, data.freeze());
         {
-            let mut conns = self.conns.lock().unwrap();
+            let mut conns = self
+                .conns
+                .lock()
+                .expect("All lock holders should not panic");
             let conn = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
                 None => {
                     return Err(io::Error::new(
@@ -640,9 +647,14 @@ impl Client {
 
     /// Sends a GET_STATUS packet and then returns the STATUS_RES in a [JobStatus]
     pub async fn get_status(&mut self, handle: &ServerHandle) -> Result<JobStatus, io::Error> {
-        // TODO: mapping?
+        let mut payload = BytesMut::with_capacity(handle.handle().len());
+        payload.extend(handle.handle());
+        let status_req = new_req(GET_STATUS, payload.freeze());
         {
-            let conns = self.conns.lock().unwrap();
+            let conns = self
+                .conns
+                .lock()
+                .expect("All lock holders should not panic");
             let conn = match conns.get_by_server(handle.server()).and_then(|conn| {
                 if conn.is_active() {
                     Some(conn)
@@ -653,9 +665,6 @@ impl Client {
                 None => return Err(io::Error::new(ErrorKind::Other, "No connection for job")),
                 Some(conn) => conn,
             };
-            let mut payload = BytesMut::with_capacity(handle.handle().len());
-            payload.extend(handle.handle());
-            let status_req = new_req(GET_STATUS, payload.freeze());
             conn.send_packet(status_req).await?;
         }
         debug!("Waiting for STATUS_RES for {}", handle);
