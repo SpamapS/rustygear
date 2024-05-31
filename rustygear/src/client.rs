@@ -446,13 +446,17 @@ impl Client {
                                                             handler.call(frame)
                                                         }
                                                     };
-                                                    if let Err(e) = response {
-                                                        error!("conn dropped?: {}", e);
-                                                        break;
-                                                    }
-                                                    if let Err(_) = tx.send(response.unwrap()).await
-                                                    {
-                                                        error!("receiver dropped")
+                                                    match response {
+                                                        Err(e) => {
+                                                            error!("conn dropped?: {}", e);
+                                                            break;
+                                                        }
+                                                        Ok(response) => {
+                                                            if let Err(_) = tx.send(response).await
+                                                            {
+                                                                error!("receiver dropped")
+                                                            }
+                                                        }
                                                     }
                                                 }
                                                 reader_conns
