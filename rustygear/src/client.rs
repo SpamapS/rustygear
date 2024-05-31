@@ -427,7 +427,7 @@ impl Client {
                                             trace!("Inserting at {}", offset);
                                             connector_conns
                                                 .lock()
-                                                .unwrap()
+                                                .expect("Insert method should not panic.")
                                                 .insert(offset, handler.clone());
                                             trace!("Inserted at {}", offset);
                                             let reader_conns = connector_conns.clone();
