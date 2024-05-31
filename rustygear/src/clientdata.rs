@@ -115,31 +115,59 @@ impl ClientData {
 
     pub fn receivers(&self) -> MutexGuard<ClientReceivers> {
         trace!("Locking receivers");
-        self.receivers.lock().unwrap()
+        self.receivers
+            .lock()
+            .expect("Threads should not panic while holding lock.")
     }
 
     pub fn echo_tx(&self) -> Sender<Bytes> {
-        self.senders.read().unwrap().echo_tx.clone()
+        self.senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .echo_tx
+            .clone()
     }
 
     pub fn job_created_tx(&self) -> Sender<JobCreated> {
-        self.senders.read().unwrap().job_created_tx.clone()
+        self.senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .job_created_tx
+            .clone()
     }
 
     pub fn error_tx(&self) -> Sender<(Bytes, Bytes)> {
-        self.senders.read().unwrap().error_tx.clone()
+        self.senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .error_tx
+            .clone()
     }
 
     pub fn status_res_tx(&self) -> Sender<JobStatus> {
-        self.senders.read().unwrap().status_res_tx.clone()
+        self.senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .status_res_tx
+            .clone()
     }
 
     pub fn worker_job_tx(&self) -> Sender<WorkerJob> {
-        self.senders.read().unwrap().worker_job_tx.clone()
+        self.senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .worker_job_tx
+            .clone()
     }
 
     pub fn get_sender_by_handle(&self, handle: &ServerHandle) -> Option<Sender<WorkUpdate>> {
-        match self.senders.read().unwrap().senders_by_handle.get(handle) {
+        match self
+            .senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .senders_by_handle
+            .get(handle)
+        {
             None => None,
             Some(sender) => Some(sender.clone()),
         }
@@ -148,13 +176,19 @@ impl ClientData {
     pub fn set_sender_by_handle(&mut self, handle: ServerHandle, tx: Sender<WorkUpdate>) {
         self.senders
             .write()
-            .unwrap()
+            .expect("Threads should not panic while holding lock.")
             .senders_by_handle
             .insert(handle, tx);
     }
 
     pub fn get_jobs_tx_by_func(&self, func: &Vec<u8>) -> Option<Sender<WorkerJob>> {
-        match self.senders.read().unwrap().jobs_tx_by_func.get(func) {
+        match self
+            .senders
+            .read()
+            .expect("Threads should not panic while holding lock.")
+            .jobs_tx_by_func
+            .get(func)
+        {
             None => None,
             Some(tx) => Some(tx.clone()),
         }
@@ -163,7 +197,7 @@ impl ClientData {
     pub fn set_jobs_tx_by_func(&mut self, func: Vec<u8>, tx: Sender<WorkerJob>) {
         self.senders
             .write()
-            .unwrap()
+            .expect("Threads should not panic while holding lock.")
             .jobs_tx_by_func
             .insert(func, tx);
     }

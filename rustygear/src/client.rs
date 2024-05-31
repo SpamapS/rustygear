@@ -461,7 +461,7 @@ impl Client {
                                                 }
                                                 reader_conns
                                                     .lock()
-                                                    .unwrap()
+                                                    .expect("Threads should not panic while holding lock")
                                                     .get_mut(offset)
                                                     .and_then(|conn| Some(conn.set_active(false)));
                                                 if let Err(e) = reader_ctx.send(offset).await {
@@ -479,7 +479,7 @@ impl Client {
                                                         error!("Connection ({}) dropped", offset);
                                                         writer_conns
                                                             .lock()
-                                                            .unwrap()
+                                                            .expect("Threads should not panic while holding lock")
                                                             .get_mut(offset)
                                                             .and_then(|conn| {
                                                                 Some(conn.set_active(false))
@@ -715,10 +715,13 @@ impl Client {
     {
         let (tx, mut rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // Some day we'll use this param right
         {
+            let mut payload = BytesMut::with_capacity(function.len());
+            payload.extend(function.bytes());
+            let can_do = new_req(CAN_DO, payload.freeze());
             for (i, conn) in self
                 .conns
                 .lock()
-                .unwrap()
+                .expect("Threads should not panic while holding lock.")
                 .iter_mut()
                 .filter_map(|c| c.to_owned())
                 .enumerate()
@@ -729,10 +732,7 @@ impl Client {
                     // Same tx for all jobs, the jobs themselves will have a response conn ref
                     self.client_data.set_jobs_tx_by_func(k, tx.clone());
                 }
-                let mut payload = BytesMut::with_capacity(function.len());
-                payload.extend(function.bytes());
-                let can_do = new_req(CAN_DO, payload.freeze());
-                conn.send_packet(can_do).await?;
+                conn.send_packet(can_do.clone()).await?;
                 info!("Sent CAN_DO({}) to {}", function, self.servers[i]);
             }
         }
