@@ -372,7 +372,7 @@ impl Client {
                                                 let connector: TlsConnector =
                                                     TlsConnector::from(Arc::new(config.clone()));
                                                 let hostonly =
-                                                    String::from(server.split(':').next().unwrap());
+                                                    String::from(server.split(':').next().unwrap_or(""));
                                                 let servername = match ServerName::try_from(
                                                     hostonly,
                                                 ) {
