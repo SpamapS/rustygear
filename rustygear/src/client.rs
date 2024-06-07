@@ -774,7 +774,7 @@ impl Client {
                 for conn in self
                     .conns
                     .lock()
-                    .unwrap()
+                    .expect("Threads should not panic while holding lock.")
                     .iter()
                     .filter_map(|c| c.to_owned())
                 {
