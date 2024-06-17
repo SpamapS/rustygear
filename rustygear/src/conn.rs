@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    error::Error,
     fmt::{Debug, Display},
     io,
     slice::{Iter, IterMut},
@@ -82,85 +83,78 @@ impl ConnHandler {
         self.active = active
     }
 
-    pub async fn send_packet(&self, packet: Packet) -> Result<(), io::Error> {
-        if let Err(e) = self.sink_tx.send(packet).await {
-            error!("Receiver dropped");
-            return Err(io::Error::new(io::ErrorKind::Other, format!("{}", e)));
-        }
-        Ok(())
+    pub async fn send_packet(&self, packet: Packet) -> Result<(), Box<dyn Error>> {
+        Ok(self.sink_tx.send(packet).await?)
     }
 
-    pub fn call(&mut self, req: Packet) -> Result<Packet, io::Error> {
+    pub fn call(&mut self, req: Packet) -> Result<Packet, Box<dyn std::error::Error>> {
         debug!("[{:?}] Got a req {:?}", self.client_id, req);
         match req.ptype {
             NOOP => self.handle_noop(),
-            JOB_CREATED => self.handle_job_created(&req),
-            NO_JOB => self.handle_no_job(),
-            JOB_ASSIGN => self.handle_job_assign(&req),
-            JOB_ASSIGN_UNIQ => self.handle_job_assign_uniq(&req),
-            ECHO_RES => self.handle_echo_res(&req),
-            ERROR => self.handle_error(&req),
+            JOB_CREATED => Ok(self.handle_job_created(&req)),
+            NO_JOB => Ok(self.handle_no_job()),
+            JOB_ASSIGN => Ok(self.handle_job_assign(&req)),
+            JOB_ASSIGN_UNIQ => Ok(self.handle_job_assign_uniq(&req)),
+            ECHO_RES => Ok(self.handle_echo_res(&req)),
+            ERROR => Ok(self.handle_error(&req)),
             STATUS_RES | STATUS_RES_UNIQUE => self.handle_status_res(&req),
-            OPTION_RES => self.handle_option_res(&req),
+            OPTION_RES => Ok(self.handle_option_res(&req)),
             WORK_COMPLETE | WORK_DATA | WORK_STATUS | WORK_WARNING | WORK_FAIL | WORK_EXCEPTION => {
                 self.handle_work_update(&req)
             }
             //JOB_ASSIGN_ALL => self.handle_job_assign_all(&req),
             _ => {
                 error!("Unimplemented: {:?} processing packet", req);
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
+                Err(Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
                     format!("Invalid packet type {}", req.ptype),
-                ))
+                )))
             }
         }
     }
 
-    fn handle_noop(&self) -> Result<Packet, io::Error> {
+    fn handle_noop(&self) -> Result<Packet, Box<dyn Error>> {
         Ok(new_req(GRAB_JOB_UNIQ, Bytes::new()))
     }
 
-    fn handle_no_job(&self) -> Result<Packet, io::Error> {
-        Ok(new_req(PRE_SLEEP, Bytes::new()))
+    fn handle_no_job(&self) -> Packet {
+        new_req(PRE_SLEEP, Bytes::new())
     }
 
-    fn handle_echo_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_echo_res(&mut self, req: &Packet) -> Packet {
         info!("Echo response received: {:?}", req.data);
         let tx = self.client_data.echo_tx();
         let data = req.data.clone();
         runtime::Handle::current().spawn(async move { tx.send(data).await });
-        Ok(no_response())
+        no_response()
     }
 
-    fn handle_job_created(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_job_created(&mut self, req: &Packet) -> Packet {
         info!("Job Created: {:?}", req);
         let tx = self.client_data.job_created_tx();
         let handle = req.data.clone();
         let server = self.server.clone();
         runtime::Handle::current()
             .spawn(async move { tx.send(ServerHandle::new(server, handle)).await });
-        Ok(no_response())
+        no_response()
     }
 
-    fn handle_error(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_error(&mut self, req: &Packet) -> Packet {
         let mut data = req.data.clone();
         let code = next_field(&mut data);
         let text = next_field(&mut data);
         let tx = self.client_data.error_tx();
         runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
-        Ok(no_response())
+        no_response()
     }
 
-    fn handle_status_res(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_status_res(&mut self, req: &Packet) -> Result<Packet, Box<dyn Error>> {
         let mut req = req.clone();
         let mut js = JobStatus {
             handle: next_field(&mut req.data),
             known: bytes2bool(&next_field(&mut req.data)),
             running: bytes2bool(&next_field(&mut req.data)),
-            numerator: String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap(), // XXX we can do better
+            numerator: String::from_utf8(next_field(&mut req.data).to_vec())?.parse()?,
             denominator: String::from_utf8(next_field(&mut req.data).to_vec())
                 .unwrap()
                 .parse()
@@ -178,16 +172,16 @@ impl ConnHandler {
         Ok(no_response())
     }
 
-    fn handle_option_res(&mut self, _req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_option_res(&mut self, _req: &Packet) -> Packet {
         /*
         if let Some(option_call) = self.option_call {
             option_call(req.data)
         }
         */
-        Ok(no_response())
+        no_response()
     }
 
-    fn handle_work_update(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_work_update(&mut self, req: &Packet) -> Result<Packet, Box<dyn Error>> {
         let mut data = req.data.clone();
         let handle = next_field(&mut data);
         let payload = next_field(&mut data);
@@ -238,7 +232,7 @@ impl ConnHandler {
         Ok(no_response())
     }
 
-    fn handle_job_assign(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_job_assign(&mut self, req: &Packet) -> Packet {
         let mut data = req.data.clone();
         let handle = next_field(&mut data);
         let function = next_field(&mut data);
@@ -253,10 +247,10 @@ impl ConnHandler {
         };
         let tx = self.client_data.worker_job_tx();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
-        Ok(no_response())
+        no_response()
     }
 
-    fn handle_job_assign_uniq(&mut self, req: &Packet) -> Result<Packet, io::Error> {
+    fn handle_job_assign_uniq(&mut self, req: &Packet) -> Packet {
         let mut data = req.data.clone();
         let handle = next_field(&mut data);
         let function = next_field(&mut data);
@@ -271,7 +265,7 @@ impl ConnHandler {
         };
         let tx = self.client_data.worker_job_tx();
         runtime::Handle::current().spawn(async move { tx.send(job).await });
-        Ok(no_response())
+        no_response()
     }
 }
 

@@ -202,7 +202,14 @@ async fn test_client_multi_server() {
             },
         };
     };
-    assert_eq!(status_error.kind(), ErrorKind::Other);
+    assert!(status_error.is::<std::io::Error>());
+    assert_eq!(
+        status_error
+            .downcast::<std::io::Error>()
+            .expect("downcast after is")
+            .kind(),
+        ErrorKind::NotConnected
+    );
 }
 
 #[tokio::test]
