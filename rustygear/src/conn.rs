@@ -155,17 +155,11 @@ impl ConnHandler {
             known: bytes2bool(&next_field(&mut req.data)),
             running: bytes2bool(&next_field(&mut req.data)),
             numerator: String::from_utf8(next_field(&mut req.data).to_vec())?.parse()?,
-            denominator: String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap(),
+            denominator: String::from_utf8(next_field(&mut req.data).to_vec())?.parse()?,
             waiting: 0,
         };
         if req.ptype == STATUS_RES_UNIQUE {
-            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec())
-                .unwrap()
-                .parse()
-                .unwrap();
+            js.waiting = String::from_utf8(next_field(&mut req.data).to_vec())?.parse()?;
         }
         let tx = self.client_data.status_res_tx();
         runtime::Handle::current().spawn(async move { tx.send(js).await });
@@ -206,14 +200,9 @@ impl ConnHandler {
                 },
                 WORK_FAIL => WorkUpdate::Fail(handle),
                 WORK_STATUS => {
-                    let numerator: usize = String::from_utf8((&payload).to_vec())
-                        .unwrap()
-                        .parse()
-                        .unwrap();
-                    let denominator: usize = String::from_utf8(next_field(&mut data).to_vec())
-                        .unwrap()
-                        .parse()
-                        .unwrap();
+                    let numerator: usize = String::from_utf8((&payload).to_vec())?.parse()?;
+                    let denominator: usize =
+                        String::from_utf8(next_field(&mut data).to_vec())?.parse()?;
                     WorkUpdate::Status {
                         handle: handle,
                         numerator: numerator,
