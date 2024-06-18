@@ -227,21 +227,15 @@ impl WorkerJob {
         payload.put_u8(b'\0');
         payload.extend(denominator.as_bytes());
         let packet = new_res(WORK_STATUS, payload.freeze());
-        self.send_packet(packet).await.map_err(|e| {
-            if e.is::<std::io::Error>() {
-                *e.downcast::<std::io::Error>().expect("downcast after is")
-            } else {
-                std::io::Error::new(io::ErrorKind::Other, e.to_string())
-            }
-        })
+        self.send_packet(packet).await
     }
 
-    async fn send_packet(&mut self, packet: Packet) -> Result<(), Box<dyn Error>> {
+    pub async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
         match self.sink_tx.send(packet).await {
-            Err(_) => Err(Box::new(io::Error::new(
+            Err(_) => Err(io::Error::new(
                 io::ErrorKind::NotConnected,
                 "Connection closed",
-            ))),
+            )),
             Ok(_) => Ok(()),
         }
     }
@@ -250,7 +244,7 @@ impl WorkerJob {
     ///
     /// This method is typically called by the [Client::work] method upon return
     /// of an error from the assigned closure.
-    pub async fn work_fail(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
         let packet = new_res(WORK_FAIL, self.handle.clone());
         self.send_packet(packet).await
     }
@@ -259,7 +253,7 @@ impl WorkerJob {
     ///
     /// This method is typically called by the [Client::work] method upon return of
     /// the assigned closure.
-    pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), Box<dyn Error>> {
+    pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
         let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
         payload.extend(self.handle.clone());
         payload.put_u8(b'\0');
@@ -449,29 +443,38 @@ impl Client {
                                                 let tx = tx.clone();
                                                 while let Some(frame) = stream.next().await {
                                                     trace!("Frame read: {:?}", frame);
-                                                    let response = match frame {
-                                                        Err(e) => Err(e.to_string()),
-                                                        Ok(frame) => {
-                                                            let handler = handler.clone();
-                                                            debug!("Locking handler");
-                                                            let mut handler = handler;
-                                                            debug!("Locked handler");
-                                                            handler
-                                                                .call(frame)
-                                                                .map_err(|e| e.to_string())
+                                                    // This lexical scope is needed because the compiler can't figure out
+                                                    // that response's error is dropped before the await.
+                                                    // See: https://github.com/rust-lang/rust/pull/107421 for the fix
+                                                    // which is only in nightly as of this writing.
+                                                    let packet = {
+                                                        let response = match frame {
+                                                            Err(e) => {
+                                                                Err(Box::new(e) as Box<dyn Error>)
+                                                            }
+                                                            Ok(frame) => {
+                                                                let handler = handler.clone();
+                                                                debug!("Locking handler");
+                                                                let mut handler = handler;
+                                                                debug!("Locked handler");
+                                                                handler.call(frame)
+                                                            } //.map_err(|e| e)
+                                                              // Ugh this map_err
+                                                        };
+                                                        match response {
+                                                            Err(e) => {
+                                                                if e.is::<io::Error>() {
+                                                                    error!("conn dropped?: {}", e);
+                                                                    break;
+                                                                }
+                                                                error!("There was a non-fatal error while processing a packet: {}", e);
+                                                                continue;
+                                                            }
+                                                            Ok(packet) => packet,
                                                         }
                                                     };
-                                                    match response {
-                                                        Err(e) => {
-                                                            error!("conn dropped?: {}", e);
-                                                            break;
-                                                        }
-                                                        Ok(response) => {
-                                                            if let Err(_) = tx.send(response).await
-                                                            {
-                                                                error!("receiver dropped")
-                                                            }
-                                                        }
+                                                    if let Err(_) = tx.send(packet).await {
+                                                        warn!("receiver dropped")
                                                     }
                                                 }
                                                 reader_conns

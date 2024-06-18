@@ -1,36 +1,8 @@
-use std::{io::ErrorKind, net::SocketAddr, time::Duration};
+use std::{io::ErrorKind, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate, WorkerJob};
-use rustygeard::testutil::start_test_server;
+use rustygeard::testutil::{connect, connect_with_client_id, start_test_server, worker};
 use tokio::time::{sleep, timeout};
-
-async fn connect(addr: &SocketAddr) -> Client {
-    connect_with_client_id(addr, "tests").await
-}
-
-async fn connect_with_client_id(addr: &SocketAddr, client_id: &'static str) -> Client {
-    let client = Client::new().add_server(&addr.to_string());
-    client
-        .set_client_id(client_id)
-        .connect()
-        .await
-        .expect("Failed to connect to server")
-}
-
-async fn worker(addr: &SocketAddr) -> Client {
-    connect(addr)
-        .await
-        .can_do("testfunc", |workerjob| {
-            Ok(format!(
-                "worker saw {} with unique [{}]",
-                String::from_utf8_lossy(workerjob.payload()),
-                String::from_utf8_lossy(workerjob.unique())
-            )
-            .into_bytes())
-        })
-        .await
-        .expect("CAN_DO should work")
-}
 
 #[tokio::test]
 async fn test_client_connects() {
