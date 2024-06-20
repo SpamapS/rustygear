@@ -782,7 +782,11 @@ impl Client {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .build()
                         .expect("Tokio builder should not panic");
-                    let res = func_clone.lock().unwrap()(&mut job);
+                    let res = func_clone
+                        .lock()
+                        .expect("This should be the only place where we ever hold this lock.")(
+                        &mut job,
+                    );
                     match res {
                         Err(_) => {
                             if let Err(e) = rt.block_on(job.work_fail()) {
@@ -797,7 +801,7 @@ impl Client {
                     };
                 })
                 .await
-                .unwrap();
+                .expect("Function may panic.");
             }
         });
         Ok(self)
