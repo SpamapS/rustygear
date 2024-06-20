@@ -230,6 +230,11 @@ impl WorkerJob {
         self.send_packet(packet).await
     }
 
+    /// Sends a [Packet] to the server
+    ///
+    /// This method is meant to be called by workers when they would like to send a
+    /// packet that isn't implemented by this library. Note that this does not
+    /// attach the job handle to the packet as that is not a part of all packets.
     pub async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
         match self.sink_tx.send(packet).await {
             Err(_) => Err(io::Error::new(
