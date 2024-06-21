@@ -144,6 +144,12 @@ impl ConnHandler {
         let code = next_field(&mut data);
         let text = next_field(&mut data);
         let tx = self.client_data.error_tx();
+        warn!(
+            "We got an error from [{}]. [{}]({})",
+            self.server(),
+            String::from_utf8_lossy(&code),
+            String::from_utf8_lossy(&text)
+        );
         runtime::Handle::current().spawn(async move { tx.send((code, text)).await });
         no_response()
     }

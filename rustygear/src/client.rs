@@ -304,6 +304,15 @@ impl Client {
         self
     }
 
+    /// Configures the client ID for this client
+    ///
+    /// It's right and valid to set client IDs to something other than what UTF8 allows
+    /// on other implementations, and for testing purposes on rustygear.
+    pub fn set_client_id_bytes(mut self, client_id: &[u8]) -> Self {
+        self.client_id = Some(Bytes::copy_from_slice(client_id));
+        self
+    }
+
     /// Returns a Vec of references to strings corresponding to only active servers
     pub fn active_servers(&self) -> Vec<Hostname> {
         // Active servers will have a writer and a reader
@@ -877,7 +886,16 @@ impl Client {
 
     /// Gets a single error that might have come from the server. The tuple returned is (code,
     /// message)
-    pub async fn error(&mut self) -> Result<Option<(Bytes, Bytes)>, &str> {
-        Ok(self.client_data.receivers().error_rx.recv().await)
+    pub async fn error(&mut self) -> Option<(Bytes, Bytes)> {
+        match self.client_data.receivers().error_rx.try_recv() {
+            Ok(content) => Some(content),
+            Err(e) => match e {
+                TryRecvError::Empty => None,
+                TryRecvError::Disconnected => {
+                    warn!("Error Channel read whlie disconnected.");
+                    None
+                }
+            },
+        }
     }
 }

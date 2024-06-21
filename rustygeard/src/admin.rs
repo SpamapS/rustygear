@@ -67,8 +67,9 @@ pub fn admin_command_workers(workers: WorkersByConnId) -> Packet {
         // actually makes the workers command more useful as it lets us see
         // where in the roundrobin each worker is
         let mut worker = worker.lock().unwrap();
-        let client_id = String::from_utf8(worker.client_id.to_vec()).unwrap();
-        response.extend(format!("{} {} {} :", conn_id, worker.peer_addr, client_id).bytes());
+        response.extend(format!("{} {} ", conn_id, worker.peer_addr).bytes());
+        response.extend(worker.client_id.as_bytes());
+        response.extend(b" :");
         for func in worker.functions.iter() {
             response.put_u8(b' ');
             response.extend(func);

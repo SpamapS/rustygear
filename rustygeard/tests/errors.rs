@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
 use rustygear::{
     client::{Client, WorkUpdate, WorkerJob},
     constants::WORK_STATUS,
@@ -51,4 +51,29 @@ async fn test_worker_sends_bad_work_status() {
             payload: _
         }
     ));
+}
+
+#[tokio::test]
+async fn test_client_sends_nulled_client_id() {
+    let server = start_test_server().unwrap();
+    let mut client = Client::new()
+        .add_server(&server.addr().to_string())
+        .set_client_id_bytes(b"b4F8\xF8after")
+        .connect()
+        .await
+        .expect("Should connect to server");
+    client
+        .echo(b"wait for client error")
+        .await
+        .expect("ECHO should go through");
+    assert_eq!(
+        client
+            .error()
+            .await
+            .expect("We should get an error immediately"),
+        (
+            Bytes::copy_from_slice(b"2"),
+            Bytes::copy_from_slice(b"ClientID must be valid UTF-8")
+        )
+    );
 }

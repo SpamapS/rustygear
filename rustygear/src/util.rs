@@ -15,7 +15,8 @@
 */
 use crate::codec::{Packet, PacketMagic};
 use crate::constants::*;
-use bytes::{Buf, Bytes};
+use crate::error::RustygearServerError;
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 pub fn bytes2bool(input: &Bytes) -> bool {
     if input.len() != 1 {
@@ -43,6 +44,16 @@ pub fn new_req(ptype: u32, data: Bytes) -> Packet {
         psize: data.len() as u32,
         data: data,
     }
+}
+
+pub fn new_err(err: RustygearServerError, message: Bytes) -> Packet {
+    let code = format!("{}", err as i32);
+    let code = code.bytes();
+    let mut data = BytesMut::with_capacity(code.len() + message.len() + 1);
+    data.extend(code);
+    data.put_u8(b'\0');
+    data.extend(message);
+    new_res(ERROR, data.freeze())
 }
 
 pub fn next_field(buf: &mut Bytes) -> Bytes {

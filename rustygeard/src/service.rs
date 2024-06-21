@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io;
+use std::io::{self};
 use std::net::SocketAddr;
 use std::ops::Drop;
 use std::pin::Pin;
@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use core::task::{Context, Poll};
 
 use futures::Future;
+use rustygear::error::RustygearServerError;
 use tokio::runtime;
 use tokio::sync::mpsc::Sender;
 use tower_service::Service;
@@ -18,7 +19,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use rustygear::codec::{Packet, PacketMagic};
 use rustygear::constants::*;
 use rustygear::job::Job;
-use rustygear::util::{new_res, next_field, no_response};
+use rustygear::util::{new_err, new_res, next_field, no_response};
 
 use crate::admin;
 use crate::queues::{HandleJobStorage, JobQueuePriority, SharedJobStorage};
@@ -122,7 +123,7 @@ impl GearmanService {
         GearmanService {
             conn_id: conn_id,
             queues: queues,
-            worker: Arc::new(Mutex::new(Worker::new(peer_addr, Bytes::from("-")))),
+            worker: Arc::new(Mutex::new(Worker::new(peer_addr, String::from("-")))),
             workers: workers,
             job_count: job_count,
             senders_by_conn_id: senders_by_conn_id,
@@ -354,10 +355,21 @@ impl GearmanService {
     }
 
     fn handle_set_client_id(&self, packet: &Packet) -> Result<Packet, io::Error> {
-        let d = packet.data.clone();
-        let mut worker = self.worker.lock().unwrap();
-        worker.client_id = d;
-        Ok(no_response())
+        let d: Vec<u8> = packet.data.clone().into();
+        match String::from_utf8(d) {
+            Ok(s) => {
+                let mut worker = self.worker.lock().unwrap();
+                worker.client_id = s;
+                Ok(no_response())
+            }
+            Err(e) => {
+                warn!("Received bad clientID: {}", e);
+                Ok(new_err(
+                    RustygearServerError::InvalidClientId,
+                    Bytes::from("ClientID must be valid UTF-8"),
+                ))
+            }
+        }
     }
 
     fn handle_get_status(&self, packet: &Packet) -> Result<Packet, io::Error> {
