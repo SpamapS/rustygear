@@ -1,10 +1,12 @@
 use std::{
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
 
 use rustygear::client::{Client, WorkUpdate};
 use rustygeard::testutil::start_test_server;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 #[test]
@@ -68,8 +70,14 @@ async fn test_server_coalesces_uniqs() {
         .await
         .expect("Submitting uniqid1 on client2");
     tx.send(()).await.expect("Sending to let the worker finish");
-    let response1 = job1.response().await.expect("Getting response to job1");
-    let response2 = job2.response().await.expect("Getting response to job2");
+    let response1 = timeout(Duration::from_millis(1000), job1.response())
+        .await
+        .expect("response1 timeout")
+        .expect("Getting response to job1");
+    let response2 = timeout(Duration::from_millis(1000), job2.response())
+        .await
+        .expect("reponse2 timeout")
+        .expect("Getting response to job2");
     if let WorkUpdate::Complete {
         handle: handle1,
         payload: payload1,
@@ -99,8 +107,14 @@ async fn test_server_coalesces_uniqs() {
         .expect("submitting uniqid2b job");
     tx.send(()).await.expect("Sending to let the worker finish");
     tx.send(()).await.expect("Sending to let the worker finish");
-    let response1b = job1b.response().await.expect("Getting response from job1b");
-    let response2b = job2b.response().await.expect("Getting response from job2b");
+    let response1b = timeout(Duration::from_millis(1000), job1b.response())
+        .await
+        .expect("response1b timeout")
+        .expect("Getting response from job1b");
+    let response2b = timeout(Duration::from_millis(1000), job2b.response())
+        .await
+        .expect("response2b timeout")
+        .expect("Getting response from job2b");
     if let WorkUpdate::Complete {
         handle: handle1b,
         payload: _,
