@@ -75,8 +75,10 @@ fn main() -> ExitCode {
         .expect("default_value should ensure this");
     env_logger::init();
 
-    info!("Binding to {}", listen);
-    let address = listen.parse().unwrap();
+    info!("Will listen at {}", listen);
+    let address = listen
+        .parse()
+        .expect("Anything passed to listen must parse into a SocketAddr");
     #[cfg(feature = "tls")]
     let tls = match matches.get_flag("tls") {
         false => None,
