@@ -52,7 +52,7 @@ impl GearmanServer {
         let senders_by_conn_id = Arc::new(Mutex::new(HashMap::new()));
         let workers_by_conn_id = Arc::new(Mutex::new(BTreeMap::new()));
         let job_waiters = Arc::new(Mutex::new(HashMap::new()));
-        let rt = runtime::Runtime::new().unwrap();
+        let rt = runtime::Runtime::new().expect("Runtime without config should work.");
         let acceptor: Acceptor = match tls {
             None => None,
             #[cfg(feature = "tls")]
@@ -78,7 +78,10 @@ impl GearmanServer {
                         continue;
                     }
                 };
-                let conn_id: usize = plain_sock.as_raw_fd().try_into().unwrap();
+                let conn_id: usize = plain_sock
+                    .as_raw_fd()
+                    .try_into()
+                    .expect("Any OS we work on will have usize-ish FDs");
                 let sock = match acceptor {
                     None => WrappedStream::from(plain_sock),
                     #[cfg(feature = "tls")]
