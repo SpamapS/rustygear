@@ -1,10 +1,11 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex, MutexGuard, RwLock},
+    sync::{Arc, RwLock},
 };
 
 use bytes::Bytes;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::{Mutex, MutexGuard};
 
 use crate::{
     client::{JobStatus, WorkUpdate, WorkerJob},
@@ -113,11 +114,11 @@ impl ClientData {
         }
     }
 
-    pub fn receivers(&self) -> MutexGuard<ClientReceivers> {
+    pub async fn receivers(&self) -> MutexGuard<ClientReceivers> {
         trace!("Locking receivers");
         self.receivers
             .lock()
-            .expect("Threads should not panic while holding lock.")
+            .await
     }
 
     pub fn echo_tx(&self) -> Sender<Bytes> {
