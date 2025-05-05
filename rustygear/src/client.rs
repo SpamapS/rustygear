@@ -19,7 +19,7 @@ use std::fmt::Display;
  * limitations under the License.
 */
 use std::io::{self, ErrorKind};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{BufMut, Bytes, BytesMut};
@@ -30,7 +30,7 @@ use tokio::net::{lookup_host, TcpStream};
 use tokio::runtime;
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::task;
+use tokio::sync::Mutex;
 use tokio::time::sleep;
 
 #[cfg(feature = "tls")]
@@ -314,11 +314,11 @@ impl Client {
     }
 
     /// Returns a Vec of references to strings corresponding to only active servers
-    pub fn active_servers(&self) -> Vec<Hostname> {
+    pub async fn active_servers(&self) -> Vec<Hostname> {
         // Active servers will have a writer and a reader
         self.conns
             .lock()
-            .expect("All lock holders should not panic")
+            .await
             .active_servers()
             .map(|hostname| hostname.clone())
             .collect()
@@ -448,7 +448,7 @@ impl Client {
                                             trace!("Inserting at {}", offset);
                                             connector_conns
                                                 .lock()
-                                                .expect("Insert method should not panic.")
+                                                .await
                                                 .insert(offset, handler.clone());
                                             trace!("Inserted at {}", offset);
                                             let reader_conns = connector_conns.clone();
@@ -493,7 +493,7 @@ impl Client {
                                                 }
                                                 reader_conns
                                                     .lock()
-                                                    .expect("Threads should not panic while holding lock")
+                                                    .await
                                                     .get_mut(offset)
                                                     .and_then(|conn| Some(conn.set_active(false)));
                                                 if let Err(e) = reader_ctx.send(offset).await {
@@ -511,7 +511,7 @@ impl Client {
                                                         error!("Connection ({}) dropped", offset);
                                                         writer_conns
                                                             .lock()
-                                                            .expect("Threads should not panic while holding lock")
+                                                            .await
                                                             .get_mut(offset)
                                                             .and_then(|conn| {
                                                                 Some(conn.set_active(false))
@@ -582,7 +582,7 @@ impl Client {
             let conns = self
                 .conns
                 .lock()
-                .expect("All lock holders should not panic");
+                .await;
             if conns.len() < 1 {
                 return Err(Box::new(io::Error::new(
                     io::ErrorKind::NotConnected,
@@ -596,7 +596,7 @@ impl Client {
                 .await?;
         } // Unlock conns
         debug!("Waiting for echo response");
-        match self.client_data.receivers().echo_rx.recv().await {
+        match self.client_data.receivers().await.echo_rx.recv().await {
             Some(res) => info!("echo received: {:?}", res),
             None => info!("echo channel closed"),
         };
@@ -674,7 +674,7 @@ impl Client {
             let mut conns = self
                 .conns
                 .lock()
-                .expect("All lock holders should not panic");
+                .await;
             let conn = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
                 None => {
                     return Err(Box::new(io::Error::new(
@@ -689,7 +689,7 @@ impl Client {
         }
         let client_data = self.client_data.clone();
         let submit_result = if let Some(handle) =
-            client_data.receivers().job_created_rx.recv().await
+            client_data.receivers().await.job_created_rx.recv().await
         {
             let (tx, rx) = channel(CLIENT_CHANNEL_BOUND_SIZE); // XXX lamer
             match ptype {
@@ -717,7 +717,7 @@ impl Client {
             let conns = self
                 .conns
                 .lock()
-                .expect("All lock holders should not panic");
+                .await;
             let conn = match conns.get_by_server(handle.server()).and_then(|conn| {
                 if conn.is_active() {
                     Some(conn)
@@ -736,7 +736,7 @@ impl Client {
             conn.send_packet(status_req).await?;
         }
         debug!("Waiting for STATUS_RES for {}", handle);
-        if let Some(status_res) = self.client_data.receivers().status_res_rx.recv().await {
+        if let Some(status_res) = self.client_data.receivers().await.status_res_rx.recv().await {
             Ok(status_res)
         } else {
             Err(Box::new(io::Error::new(
@@ -768,7 +768,7 @@ impl Client {
             for (i, conn) in self
                 .conns
                 .lock()
-                .expect("Threads should not panic while holding lock.")
+                .await
                 .iter_mut()
                 .filter_map(|c| c.to_owned())
                 .enumerate()
@@ -787,30 +787,26 @@ impl Client {
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
                 let func_clone = func_arc.clone();
-                task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .build()
-                        .expect("Tokio builder should not panic");
-                    let res = func_clone
-                        .lock()
-                        .expect("This should be the only place where we ever hold this lock.")(
-                        &mut job,
-                    );
-                    match res {
-                        Err(_) => {
-                            if let Err(e) = rt.block_on(job.work_fail()) {
-                                warn!("Failed to send WORK_FAIL {}", e);
-                            }
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .build()
+                    .expect("Tokio builder should not panic");
+                let res = func_clone
+                    .lock()
+                    .await(
+                    &mut job,
+                );
+                match res {
+                    Err(_) => {
+                        if let Err(e) = rt.block_on(job.work_fail()) {
+                            warn!("Failed to send WORK_FAIL {}", e);
                         }
-                        Ok(response) => {
-                            if let Err(e) = rt.block_on(job.work_complete(response)) {
-                                warn!("Failed to send WORK_COMPLETE {}", e);
-                            }
+                    }
+                    Ok(response) => {
+                        if let Err(e) = rt.block_on(job.work_complete(response)) {
+                            warn!("Failed to send WORK_COMPLETE {}", e);
                         }
-                    };
-                })
-                .await
-                .expect("Function may panic.");
+                    }
+                };
             }
         });
         Ok(self)
@@ -819,20 +815,20 @@ impl Client {
     /// Receive and do just one job. Will not return until a job is done or there
     /// is an error. This is called in a loop by [Client::work].
     pub async fn do_one_job(&mut self) -> Result<(), Box<dyn Error>> {
-        let job = self.client_data.receivers().worker_job_rx.try_recv();
+        let job = self.client_data.receivers().await.worker_job_rx.try_recv();
         let job = match job {
             Err(TryRecvError::Empty) => {
                 for conn in self
                     .conns
                     .lock()
-                    .expect("Threads should not panic while holding lock.")
+                    .await
                     .iter()
                     .filter_map(|c| c.to_owned())
                 {
                     let packet = new_req(GRAB_JOB_UNIQ, Bytes::new());
                     conn.send_packet(packet).await?;
                 }
-                match self.client_data.receivers().worker_job_rx.recv().await {
+                match self.client_data.receivers().await.worker_job_rx.recv().await {
                     Some(job) => job,
                     None => {
                         return Err(Box::new(io::Error::new(
@@ -887,7 +883,7 @@ impl Client {
     /// Gets a single error that might have come from the server. The tuple returned is (code,
     /// message)
     pub async fn error(&mut self) -> Option<(Bytes, Bytes)> {
-        match self.client_data.receivers().error_rx.try_recv() {
+        match self.client_data.receivers().await.error_rx.try_recv() {
             Ok(content) => Some(content),
             Err(e) => match e {
                 TryRecvError::Empty => None,

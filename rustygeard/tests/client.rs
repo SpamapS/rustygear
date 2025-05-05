@@ -157,7 +157,7 @@ async fn test_client_multi_server() {
     drop(job_server);
     let mut retries = 5;
     let status_error = loop {
-        if client.active_servers().contains(&cjob_server_str) {
+        if client.active_servers().await.contains(&cjob_server_str) {
             retries -= 1;
             if retries <= 0 {
                 panic!("Failed to detect disconnected server");
@@ -350,7 +350,7 @@ async fn test_unique_routing() {
     servers.swap_remove(offset);
     // Wait until it's not in active servers
     loop {
-        if client1.active_servers().contains(routed_server) {
+        if client1.active_servers().await.contains(routed_server) {
             sleep(Duration::from_millis(100)).await;
         } else {
             break;
