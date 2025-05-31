@@ -579,10 +579,7 @@ impl Client {
     pub async fn echo(&mut self, payload: &[u8]) -> Result<(), Box<dyn Error>> {
         let packet = new_req(ECHO_REQ, Bytes::copy_from_slice(payload));
         {
-            let conns = self
-                .conns
-                .lock()
-                .await;
+            let conns = self.conns.lock().await;
             if conns.len() < 1 {
                 return Err(Box::new(io::Error::new(
                     io::ErrorKind::NotConnected,
@@ -671,10 +668,7 @@ impl Client {
         data.extend(payload);
         let packet = new_req(ptype, data.freeze());
         {
-            let mut conns = self
-                .conns
-                .lock()
-                .await;
+            let mut conns = self.conns.lock().await;
             let conn = match conns.get_hashed_conn(&unique.iter().map(|b| *b).collect()) {
                 None => {
                     return Err(Box::new(io::Error::new(
@@ -714,10 +708,7 @@ impl Client {
         payload.extend(handle.handle());
         let status_req = new_req(GET_STATUS, payload.freeze());
         {
-            let conns = self
-                .conns
-                .lock()
-                .await;
+            let conns = self.conns.lock().await;
             let conn = match conns.get_by_server(handle.server()).and_then(|conn| {
                 if conn.is_active() {
                     Some(conn)
@@ -736,7 +727,14 @@ impl Client {
             conn.send_packet(status_req).await?;
         }
         debug!("Waiting for STATUS_RES for {}", handle);
-        if let Some(status_res) = self.client_data.receivers().await.status_res_rx.recv().await {
+        if let Some(status_res) = self
+            .client_data
+            .receivers()
+            .await
+            .status_res_rx
+            .recv()
+            .await
+        {
             Ok(status_res)
         } else {
             Err(Box::new(io::Error::new(
@@ -787,22 +785,15 @@ impl Client {
         runtime::Handle::current().spawn(async move {
             while let Some(mut job) = rx.recv().await {
                 let func_clone = func_arc.clone();
-                let rt = tokio::runtime::Builder::new_current_thread()
-                    .build()
-                    .expect("Tokio builder should not panic");
-                let res = func_clone
-                    .lock()
-                    .await(
-                    &mut job,
-                );
+                let res = func_clone.lock().await(&mut job);
                 match res {
                     Err(_) => {
-                        if let Err(e) = rt.block_on(job.work_fail()) {
+                        if let Err(e) = job.work_fail().await {
                             warn!("Failed to send WORK_FAIL {}", e);
                         }
                     }
                     Ok(response) => {
-                        if let Err(e) = rt.block_on(job.work_complete(response)) {
+                        if let Err(e) = job.work_complete(response).await {
                             warn!("Failed to send WORK_COMPLETE {}", e);
                         }
                     }
@@ -818,17 +809,18 @@ impl Client {
         let job = self.client_data.receivers().await.worker_job_rx.try_recv();
         let job = match job {
             Err(TryRecvError::Empty) => {
-                for conn in self
-                    .conns
-                    .lock()
-                    .await
-                    .iter()
-                    .filter_map(|c| c.to_owned())
-                {
+                for conn in self.conns.lock().await.iter().filter_map(|c| c.to_owned()) {
                     let packet = new_req(GRAB_JOB_UNIQ, Bytes::new());
                     conn.send_packet(packet).await?;
                 }
-                match self.client_data.receivers().await.worker_job_rx.recv().await {
+                match self
+                    .client_data
+                    .receivers()
+                    .await
+                    .worker_job_rx
+                    .recv()
+                    .await
+                {
                     Some(job) => job,
                     None => {
                         return Err(Box::new(io::Error::new(
