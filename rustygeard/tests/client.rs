@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, time::Duration};
+use std::{io::ErrorKind, thread, time::Duration};
 
 use rustygear::client::{Client, WorkUpdate, WorkerJob};
 use rustygeard::testutil::{connect, connect_with_client_id, start_test_server, worker};
@@ -269,10 +269,16 @@ async fn test_work_status() {
     let server = start_test_server().unwrap();
     let worker = connect_with_client_id(server.addr(), "status-worker").await;
     fn sends_status(work: &mut WorkerJob) -> Result<Vec<u8>, std::io::Error> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        rt.block_on(work.work_status(50, 100))?;
+        let mut updater = work.status_updater();
+        let status_update_thread = thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            rt.block_on(updater.work_status(50, 100))
+                .expect("Updater failed");
+        });
+        status_update_thread.join().expect("Updater failed");
+
         Ok("Done".into())
     }
     let mut worker = worker

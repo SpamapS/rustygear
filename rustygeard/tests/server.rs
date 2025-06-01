@@ -29,7 +29,7 @@ async fn test_server_coalesces_uniqs() {
         .connect()
         .await
         .expect("Connecting client2");
-    let (tx, rx) = tokio::sync::mpsc::channel(2);
+    let (tx, rx) = std::sync::mpsc::channel();
     let rx = Arc::new(Mutex::new(rx));
     let server_addr = server.addr().to_string().clone();
     thread::spawn(move || {
@@ -48,7 +48,7 @@ async fn test_server_coalesces_uniqs() {
                 .can_do("uniqfunc", move |_job| {
                     rx.lock()
                         .unwrap()
-                        .blocking_recv()
+                        .recv()
                         .expect("Waiting to continue worker");
                     let payload = Uuid::new_v4();
                     Ok(Vec::from(payload.into_bytes()))
@@ -69,7 +69,7 @@ async fn test_server_coalesces_uniqs() {
         .submit_unique("uniqfunc", b"uniqid1", b"")
         .await
         .expect("Submitting uniqid1 on client2");
-    tx.send(()).await.expect("Sending to let the worker finish");
+    tx.send(()).expect("Sending to let the worker finish");
     let response1 = timeout(Duration::from_millis(1000), job1.response())
         .await
         .expect("response1 timeout")
@@ -105,8 +105,8 @@ async fn test_server_coalesces_uniqs() {
         .submit_unique("uniqfunc", b"uniqid2b", b"")
         .await
         .expect("submitting uniqid2b job");
-    tx.send(()).await.expect("Sending to let the worker finish");
-    tx.send(()).await.expect("Sending to let the worker finish");
+    tx.send(()).expect("Sending to let the worker finish");
+    tx.send(()).expect("Sending to let the worker finish");
     let response1b = timeout(Duration::from_millis(1000), job1b.response())
         .await
         .expect("response1b timeout")

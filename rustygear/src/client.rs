@@ -128,6 +128,11 @@ pub struct WorkerJob {
     pub(crate) sink_tx: Sender<Packet>,
 }
 
+pub struct WorkerJobStatusSender {
+    pub handle: Bytes,
+    pub(crate) sink_tx: Sender<Packet>,
+}
+
 #[derive(Debug)]
 /// Logical representation of the data workers may send back to clients
 pub enum WorkUpdate {
@@ -196,20 +201,71 @@ impl WorkerJob {
     pub fn unique(&self) -> &[u8] {
         self.unique.as_ref()
     }
+    pub fn status_updater(&self) -> WorkerJobStatusSender {
+        WorkerJobStatusSender {
+            handle: self.handle.clone(),
+            sink_tx: self.sink_tx.clone(),
+        }
+    }
 
+    /// Sends a [Packet] to the server
+    ///
+    /// This method is meant to be called by workers when they would like to send a
+    /// packet that isn't implemented by this library. Note that this does not
+    /// attach the job handle to the packet as that is not a part of all packets.
+    async fn send_packet(&mut self, packet: Packet) -> Result<(), io::Error> {
+        match self.sink_tx.send(packet).await {
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Connection closed",
+            )),
+            Ok(_) => Ok(()),
+        }
+    }
+
+    /// Sends a WORK_FAIL
+    ///
+    /// This method is typically called by the [Client::work] method upon return
+    /// of an error from the assigned closure.
+    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
+        let packet = new_res(WORK_FAIL, self.handle.clone());
+        self.send_packet(packet).await
+    }
+
+    /// Sends a WORK_COMPLETE
+    ///
+    /// This method is typically called by the [Client::work] method upon return of
+    /// the assigned closure.
+    pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
+        let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
+        payload.extend(self.handle.clone());
+        payload.put_u8(b'\0');
+        payload.extend(response);
+        let packet = new_req(WORK_COMPLETE, payload.freeze());
+        self.send_packet(packet).await
+    }
+}
+
+impl WorkerJobStatusSender {
     /// Sends a WORK_STATUS
     ///
     /// This will send a WORK_STATUS packet to the server, and can be called from a worker,
-    /// although that worker may need to manage its own async runtime to execute this function.
+    /// however because worker functions are not async, workers will need to create a new runtime
+    /// to send this update.
     ///
     /// ```no_run
     /// use rustygear::client::{Client, WorkerJob};
+    /// use std::thread;
     /// let worker = Client::new();
     /// fn sends_status(work: &mut WorkerJob) -> Result<Vec<u8>, std::io::Error> {
-    ///     let rt = tokio::runtime::Builder::new_current_thread()
-    ///         .build()
-    ///         .unwrap();
-    ///     rt.block_on(work.work_status(50, 100))?;
+    ///     let mut updater = work.status_updater();
+    ///     let updater_thread = thread::spawn(move ||{
+    ///         let rt = tokio::runtime::Builder::new_current_thread()
+    ///             .build()
+    ///             .unwrap();
+    ///         rt.block_on(updater.work_status(50, 100));
+    ///     });
+    ///     let _ = updater_thread.join();
     ///     Ok("Done".into())
     /// }
     /// let mut worker = worker
@@ -243,28 +299,6 @@ impl WorkerJob {
             )),
             Ok(_) => Ok(()),
         }
-    }
-
-    /// Sends a WORK_FAIL
-    ///
-    /// This method is typically called by the [Client::work] method upon return
-    /// of an error from the assigned closure.
-    pub async fn work_fail(&mut self) -> Result<(), io::Error> {
-        let packet = new_res(WORK_FAIL, self.handle.clone());
-        self.send_packet(packet).await
-    }
-
-    /// Sends a WORK_COMPLETE
-    ///
-    /// This method is typically called by the [Client::work] method upon return of
-    /// the assigned closure.
-    pub async fn work_complete(&mut self, response: Vec<u8>) -> Result<(), io::Error> {
-        let mut payload = BytesMut::with_capacity(self.handle.len() + 1 + self.payload.len());
-        payload.extend(self.handle.clone());
-        payload.put_u8(b'\0');
-        payload.extend(response);
-        let packet = new_req(WORK_COMPLETE, payload.freeze());
-        self.send_packet(packet).await
     }
 }
 

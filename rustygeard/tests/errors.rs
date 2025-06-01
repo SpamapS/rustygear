@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{thread, time::Duration};
 
 use bytes::{Bytes, BytesMut};
 use rustygear::{
@@ -20,8 +20,10 @@ async fn test_worker_sends_bad_work_status() {
         let mut data = BytesMut::new();
         data.extend(work.handle());
         data.extend(b"\0notnumbers\0notnumdenom");
+        let mut updater = work.status_updater();
         let packet = new_req(WORK_STATUS, data.freeze());
-        rt.block_on(work.send_packet(packet))?;
+        let updater_thread = thread::spawn(move || rt.block_on(updater.send_packet(packet)));
+        let _ = updater_thread.join();
         Ok("Done".into())
     }
     let mut worker = worker
